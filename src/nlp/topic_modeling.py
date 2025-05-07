@@ -1,548 +1,494 @@
 """
-Topic modeling module for financial text analysis.
-Implements enhanced topic modeling with coherence optimization.
+Topic modeling module for earnings report text analysis.
+Implements advanced topic modeling with coherence optimization.
 """
 
-import pandas as pd
 import numpy as np
-import logging
-from typing import List, Dict, Union, Optional, Tuple
+import pandas as pd
 import os
+import logging
 import joblib
-from collections import defaultdict
+import re
+from typing import List, Dict, Tuple, Union, Optional
 import matplotlib.pyplot as plt
-import seaborn as sns
+from wordcloud import WordCloud
+import io
+import base64
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 
-# Optional imports for topic modeling
-try:
-    from sklearn.decomposition import LatentDirichletAllocation, NMF
-    SKLEARN_MODELS_AVAILABLE = True
-except ImportError:
-    SKLEARN_MODELS_AVAILABLE = False
-
+# Optional imports for advanced topic modeling
 try:
     import gensim
-    from gensim.corpora import Dictionary
     from gensim.models import LdaModel, CoherenceModel
+    from gensim.corpora import Dictionary
     GENSIM_AVAILABLE = True
 except ImportError:
     GENSIM_AVAILABLE = False
 
+# Optional imports for BERTopic
 try:
-    import pyLDAvis
-    import pyLDAvis.gensim_models as gensimvis
-    PYLDAVIS_AVAILABLE = True
+    from bertopic import BERTopic
+    from sklearn.feature_extraction.text import CountVectorizer
+    from umap import UMAP
+    from hdbscan import HDBSCAN
+    BERTOPIC_AVAILABLE = True
 except ImportError:
-    PYLDAVIS_AVAILABLE = False
-
-try:
-    from tmtoolkit.topicmod import evaluate, visualize
-    TMTOOLKIT_AVAILABLE = True
-except ImportError:
-    TMTOOLKIT_AVAILABLE = False
+    BERTOPIC_AVAILABLE = False
 
 logger = logging.getLogger('topic_modeler')
 
 class TopicModeler:
     """
-    Enhanced topic modeling for financial text analysis.
-    Supports LDA and NMF with coherence optimization.
+    Class for topic modeling on financial text data.
+    Supports LDA and BERTopic algorithms with coherence optimization.
     """
     
-    def __init__(self, method: str = 'lda', num_topics: int = 10, random_state: int = 42):
+    def __init__(self, method: str = 'lda', num_topics: int = 10, 
+                 random_state: int = 42, model_name: str = None):
         """
-        Initialize the topic modeler.
+        Initialize the topic modeling class.
         
         Args:
-            method: Topic modeling method ('lda', 'nmf', 'gensim_lda')
-            num_topics: Number of topics to extract
-            random_state: Random seed for reproducibility
+            method: Topic modeling algorithm ('lda', 'bertopic')
+            num_topics: Number of topics to extract (for LDA)
+            random_state: Random state for reproducibility
+            model_name: For BERTopic, optional pre-trained model name
         """
         self.method = method
         self.num_topics = num_topics
         self.random_state = random_state
+        self.model_name = model_name
         self.model = None
-        self.vectorizer = None
-        self.feature_names = None
-        self.dtm = None
-        self.corpus = None
         self.dictionary = None
-        self.coherence_values = []
-        self.perplexity_values = []
+        self.corpus = None
+        self.id2word = None
+        self.vectorizer = None
+        self.coherence_score = None
+        self.optimal_num_topics = None
         self.topic_terms = {}
-        self.topic_sentiment = {}  # For tracking sentiment associated with each topic
+        
+        logger.info(f"Initializing TopicModeler with method={method}, num_topics={num_topics}")
         
         # Check if required libraries are available
-        if method in ['lda', 'nmf'] and not SKLEARN_MODELS_AVAILABLE:
-            raise ImportError("scikit-learn is required for LDA/NMF topic modeling")
-        
-        if method == 'gensim_lda' and not GENSIM_AVAILABLE:
-            raise ImportError("gensim is required for gensim_lda topic modeling")
-            
-        logger.info(f"Initializing TopicModeler with method={method}, num_topics={num_topics}")
+        if method == 'lda' and not GENSIM_AVAILABLE:
+            logger.warning("LDA selected but gensim not available. "
+                          "Install with: pip install gensim")
+            raise ImportError("Gensim library not available")
+        elif method == 'bertopic' and not BERTOPIC_AVAILABLE:
+            logger.warning("BERTopic selected but required libraries not available. "
+                          "Install with: pip install bertopic umap-learn hdbscan")
+            raise ImportError("BERTopic library not available")
     
-    def fit(self, dtm, feature_names=None):
+    def preprocess(self, texts: List[str]) -> List[List[str]]:
         """
-        Fit the topic model on a document-term matrix.
+        Preprocess texts for topic modeling.
         
         Args:
-            dtm: Document-term matrix (scipy sparse matrix or numpy array)
-            feature_names: List of feature names (terms)
+            texts: List of text documents
+            
+        Returns:
+            List of tokenized documents
+        """
+        if not texts:
+            return []
+            
+        logger.info(f"Preprocessing {len(texts)} texts for topic modeling")
+        
+        # Simple tokenization and cleaning
+        tokenized_texts = []
+        for text in texts:
+            if not isinstance(text, str):
+                tokenized_texts.append([])
+                continue
+                
+            # Convert to lowercase
+            text = text.lower()
+            
+            # Tokenize (simple whitespace tokenization)
+            tokens = re.findall(r'\b\w+\b', text)
+            
+            # Remove short tokens
+            tokens = [t for t in tokens if len(t) > 2]
+            
+            tokenized_texts.append(tokens)
+        
+        return tokenized_texts
+    
+    def _prepare_lda_data(self, tokenized_texts: List[List[str]]):
+        """Prepare data for LDA model."""
+        # Create dictionary
+        self.dictionary = Dictionary(tokenized_texts)
+        
+        # Filter extreme terms
+        self.dictionary.filter_extremes(no_below=5, no_above=0.5)
+        
+        # Create corpus
+        self.corpus = [self.dictionary.doc2bow(text) for text in tokenized_texts]
+        
+        # Store id2word mapping
+        self.id2word = self.dictionary
+        
+        return self.corpus, self.dictionary
+    
+    def _prepare_bertopic_data(self, texts: List[str]):
+        """Prepare data for BERTopic model."""
+        # For BERTopic, we just need the raw texts
+        # We use a custom vectorizer for better control
+        self.vectorizer = CountVectorizer(
+            stop_words='english',
+            min_df=5,
+            max_df=0.5
+        )
+        return texts
+    
+    def evaluate_coherence(self, tokenized_texts: List[List[str]], 
+                          topic_range: List[int], coherence: str = 'c_v') -> Tuple[int, float, List[Tuple[int, float]]]:
+        """
+        Evaluate coherence scores for different numbers of topics.
+        
+        Args:
+            tokenized_texts: List of tokenized documents
+            topic_range: List of numbers of topics to evaluate
+            coherence: Coherence metric to use
+            
+        Returns:
+            Tuple of (optimal_num_topics, optimal_coherence_score, all_scores)
+        """
+        if not GENSIM_AVAILABLE:
+            logger.warning("Gensim not available, cannot evaluate coherence")
+            return self.num_topics, 0.0, []
+            
+        logger.info(f"Evaluating coherence for {len(topic_range)} different topic counts")
+        
+        # Prepare data
+        if self.dictionary is None or self.corpus is None:
+            self._prepare_lda_data(tokenized_texts)
+        
+        coherence_scores = []
+        
+        # Evaluate coherence for each number of topics
+        for num_topics in topic_range:
+            # Train LDA model
+            lda_model = LdaModel(
+                corpus=self.corpus,
+                id2word=self.id2word,
+                num_topics=num_topics,
+                random_state=self.random_state,
+                passes=10
+            )
+            
+            # Calculate coherence score
+            coherence_model = CoherenceModel(
+                model=lda_model,
+                texts=tokenized_texts,
+                dictionary=self.dictionary,
+                coherence=coherence
+            )
+            
+            coherence_score = coherence_model.get_coherence()
+            coherence_scores.append((num_topics, coherence_score))
+            logger.info(f"Coherence for {num_topics} topics: {coherence_score}")
+        
+        # Find optimal number of topics
+        optimal = max(coherence_scores, key=lambda x: x[1])
+        optimal_num_topics, optimal_coherence_score = optimal
+        
+        logger.info(f"Optimal number of topics: {optimal_num_topics} with coherence {optimal_coherence_score}")
+        
+        return optimal_num_topics, optimal_coherence_score, coherence_scores
+    
+    def fit(self, texts: List[str], optimize_topics: bool = False, 
+           topic_range: List[int] = None) -> 'TopicModeler':
+        """
+        Fit topic model to the texts.
+        
+        Args:
+            texts: List of text documents
+            optimize_topics: Whether to optimize number of topics (LDA only)
+            topic_range: Range of topics to consider for optimization
             
         Returns:
             Self for method chaining
         """
-        self.dtm = dtm
-        self.feature_names = feature_names
+        if not texts:
+            logger.warning("Empty text list provided to fit()")
+            return self
         
+        logger.info(f"Fitting {self.method} topic model on {len(texts)} texts")
+        
+        # Preprocess texts
+        tokenized_texts = self.preprocess(texts)
+        
+        # Optimize number of topics if requested (LDA only)
+        if optimize_topics and self.method == 'lda':
+            if topic_range is None:
+                topic_range = range(2, min(50, len(texts) // 10 + 1), 3)  # Reasonable range
+            
+            # Find optimal number of topics
+            optimal_num_topics, coherence_score, _ = self.evaluate_coherence(
+                tokenized_texts, topic_range
+            )
+            
+            self.num_topics = optimal_num_topics
+            self.coherence_score = coherence_score
+            self.optimal_num_topics = optimal_num_topics
+            
+            logger.info(f"Selected {optimal_num_topics} topics with coherence {coherence_score}")
+        
+        # Fit actual model
         if self.method == 'lda':
-            self.model = LatentDirichletAllocation(
-                n_components=self.num_topics,
-                max_iter=25,
-                learning_method='online',
-                random_state=self.random_state,
-                n_jobs=-1
-            )
-        elif self.method == 'nmf':
-            self.model = NMF(
-                n_components=self.num_topics,
-                random_state=self.random_state,
-                max_iter=1000
-            )
-        elif self.method == 'gensim_lda':
-            if not GENSIM_AVAILABLE:
-                raise ImportError("gensim is required for gensim_lda topic modeling")
-            
-            # Convert to gensim corpus format if needed
-            if self.corpus is None or self.dictionary is None:
-                raise ValueError("For gensim_lda, use fit_transform_tokens() instead of fit()")
-        
-        if self.method in ['lda', 'nmf']:
-            self.model.fit(dtm)
-            self._extract_topics_from_sklearn()
-            
-        return self
-    
-    def fit_transform_tokens(self, texts_tokens: List[List[str]], min_df: int = 2, max_df: float = 0.95):
-        """
-        Fit the topic model using tokenized texts.
-        
-        Args:
-            texts_tokens: List of tokenized texts (list of token lists)
-            min_df: Minimum document frequency for terms
-            max_df: Maximum document frequency for terms
-            
-        Returns:
-            Document-topic matrix
-        """
-        if not GENSIM_AVAILABLE:
-            raise ImportError("gensim is required for this functionality")
-        
-        # Create dictionary and corpus
-        self.dictionary = Dictionary(texts_tokens)
-        
-        # Filter extremes (words that appear in too few or too many documents)
-        self.dictionary.filter_extremes(no_below=min_df, no_above=max_df)
-        
-        # Convert tokenized texts to bag-of-words format
-        self.corpus = [self.dictionary.doc2bow(text) for text in texts_tokens]
-        
-        if self.method == 'gensim_lda':
-            # Build LDA model
-            self.model = LdaModel(
-                corpus=self.corpus,
-                id2word=self.dictionary,
-                num_topics=self.num_topics,
-                random_state=self.random_state,
-                passes=10,
-                alpha='auto',
-                eta='auto',
-                minimum_probability=0.0
-            )
-            
-            self._extract_topics_from_gensim()
-        
-        # Get document-topic matrix
-        doc_topics = self.get_document_topics()
-        
-        return doc_topics
-    
-    def _extract_topics_from_sklearn(self):
-        """Extract topics from scikit-learn models."""
-        if self.feature_names is None:
-            logger.warning("No feature names provided, using indices as feature names")
-            self.feature_names = [str(i) for i in range(self.dtm.shape[1])]
-        
-        # Get topic-term distributions
-        topic_term_dist = self.model.components_
-        
-        # For each topic, get the top terms
-        for topic_idx, topic in enumerate(topic_term_dist):
-            # Sort terms by importance in topic
-            sorted_terms_idx = topic.argsort()[::-1]
-            top_terms_idx = sorted_terms_idx[:50]  # Get indices of top 50 terms
-            top_terms = [self.feature_names[i] for i in top_terms_idx]
-            top_weights = [topic[i] for i in top_terms_idx]
-            
-            # Store topic terms with weights
-            self.topic_terms[topic_idx] = list(zip(top_terms, top_weights))
-    
-    def _extract_topics_from_gensim(self):
-        """Extract topics from gensim models."""
-        # Get topic-term distributions
-        for topic_idx in range(self.num_topics):
-            # Get top terms for topic (returns list of (term_id, weight))
-            topic_terms = self.model.get_topic_terms(topic_idx, topn=50)
-            
-            # Convert term IDs to actual terms
-            topic_terms = [(self.dictionary[term_id], weight) for term_id, weight in topic_terms]
-            
-            # Store topic terms with weights
-            self.topic_terms[topic_idx] = topic_terms
-    
-    def get_topics(self, num_words: int = 15) -> Dict[int, List[Tuple[str, float]]]:
-        """
-        Get top terms for each topic.
-        
-        Args:
-            num_words: Number of top words to include for each topic
-            
-        Returns:
-            Dictionary mapping topic IDs to lists of (term, weight) tuples
-        """
-        return {topic_id: terms[:num_words] for topic_id, terms in self.topic_terms.items()}
-    
-    def get_document_topics(self, dtm=None) -> np.ndarray:
-        """
-        Get topic distributions for documents.
-        
-        Args:
-            dtm: Document-term matrix (if None, use the one from fit)
-            
-        Returns:
-            Document-topic matrix
-        """
-        if dtm is None:
-            dtm = self.dtm
-        
-        if self.method in ['lda', 'nmf']:
-            return self.model.transform(dtm)
-        elif self.method == 'gensim_lda':
-            # For gensim, we need to convert to a numpy array
-            doc_topics = np.zeros((len(self.corpus), self.num_topics))
-            
-            for i, bow in enumerate(self.corpus):
-                topic_dist = self.model.get_document_topics(bow, minimum_probability=0)
-                for topic_id, prob in topic_dist:
-                    doc_topics[i, topic_id] = prob
-            
-            return doc_topics
-    
-    def get_dominant_topics(self, dtm=None) -> pd.DataFrame:
-        """
-        Get dominant topic for each document.
-        
-        Args:
-            dtm: Document-term matrix (if None, use the one from fit)
-            
-        Returns:
-            DataFrame with document index, dominant topic, topic proportion, and top terms
-        """
-        # Get document-topic matrix
-        doc_topics = self.get_document_topics(dtm)
-        
-        # Get dominant topic for each document
-        dominant_topics = []
-        for i, doc_topic in enumerate(doc_topics):
-            topic_idx = doc_topic.argmax()
-            topic_prop = doc_topic[topic_idx]
-            top_terms = [term for term, _ in self.get_topics()[topic_idx]][:5]
-            
-            dominant_topics.append({
-                'document_id': i,
-                'dominant_topic': int(topic_idx),
-                'topic_proportion': float(topic_prop),
-                'top_terms': ', '.join(top_terms)
-            })
-        
-        return pd.DataFrame(dominant_topics)
-    
-    def optimize_num_topics(self, dtm, feature_names=None, topic_range=range(5, 50, 5)):
-        """
-        Find optimal number of topics based on coherence and perplexity.
-        
-        Args:
-            dtm: Document-term matrix
-            feature_names: List of feature names
-            topic_range: Range of topic numbers to try
-            
-        Returns:
-            Tuple of (coherence_values, perplexity_values, optimal_num_topics)
-        """
-        coherence_values = []
-        perplexity_values = []
-        
-        for num_topics in topic_range:
-            logger.info(f"Trying model with {num_topics} topics...")
-            
-            # Set number of topics
-            self.num_topics = num_topics
-            
-            # Fit model
-            if self.method in ['lda', 'nmf']:
-                self.fit(dtm, feature_names)
-                
-                # Calculate perplexity for LDA
-                if self.method == 'lda':
-                    perplexity = self.model.perplexity(dtm)
-                    perplexity_values.append(perplexity)
-                else:
-                    perplexity_values.append(0)  # NMF doesn't have perplexity
-                
-                # Calculate topic coherence
-                if TMTOOLKIT_AVAILABLE:
-                    topic_word_matrix = self.model.components_
-                    vocab = feature_names
-                    try:
-                        coherence = evaluate.metric_coherence_gensim(
-                            topic_word_matrix=topic_word_matrix,
-                            vocab=vocab,
-                            dtm=dtm,
-                            measure='c_v'
-                        )
-                        avg_coherence = np.mean(coherence)
-                        coherence_values.append(avg_coherence)
-                    except Exception as e:
-                        logger.warning(f"Error calculating coherence: {str(e)}")
-                        coherence_values.append(0)
-                else:
-                    coherence_values.append(0)
-                    logger.warning("tmtoolkit not available, skipping coherence calculation")
-                    
-            elif self.method == 'gensim_lda' and GENSIM_AVAILABLE:
-                # For gensim, use the existing corpus and dictionary
-                if self.corpus is None or self.dictionary is None:
-                    raise ValueError("For gensim_lda, use optimize_num_topics_gensim() instead")
-            
-        # Store results
-        self.coherence_values = coherence_values
-        self.perplexity_values = perplexity_values
-        
-        # Find optimal number of topics based on coherence
-        if coherence_values:
-            optimal_idx = np.argmax(coherence_values)
-            optimal_num_topics = topic_range[optimal_idx]
-        else:
-            # If no coherence values, use perplexity
-            if perplexity_values:
-                # Lower perplexity is better
-                optimal_idx = np.argmin(perplexity_values)
-                optimal_num_topics = topic_range[optimal_idx]
-            else:
-                # If no metrics available, use middle of range
-                optimal_num_topics = topic_range[len(topic_range) // 2]
-        
-        logger.info(f"Optimal number of topics: {optimal_num_topics}")
-        
-        # Reset to optimal number of topics and refit
-        self.num_topics = optimal_num_topics
-        self.fit(dtm, feature_names)
-        
-        return coherence_values, perplexity_values, optimal_num_topics
-    
-    def optimize_num_topics_gensim(self, texts_tokens, topic_range=range(5, 50, 5)):
-        """
-        Find optimal number of topics for gensim models based on coherence.
-        
-        Args:
-            texts_tokens: List of tokenized texts
-            topic_range: Range of topic numbers to try
-            
-        Returns:
-            Tuple of (coherence_values, optimal_num_topics)
-        """
-        if not GENSIM_AVAILABLE:
-            raise ImportError("gensim is required for this functionality")
-        
-        # Create dictionary and corpus if not already done
-        if self.dictionary is None:
-            self.dictionary = Dictionary(texts_tokens)
-            self.dictionary.filter_extremes(no_below=2, no_above=0.95)
-        
-        if self.corpus is None:
-            self.corpus = [self.dictionary.doc2bow(text) for text in texts_tokens]
-        
-        coherence_values = []
-        
-        for num_topics in topic_range:
-            logger.info(f"Trying model with {num_topics} topics...")
+            # Prepare data
+            if self.dictionary is None or self.corpus is None:
+                self._prepare_lda_data(tokenized_texts)
             
             # Train LDA model
-            lda_model = LdaModel(
+            self.model = LdaModel(
                 corpus=self.corpus,
-                id2word=self.dictionary,
-                num_topics=num_topics,
+                id2word=self.id2word,
+                num_topics=self.num_topics,
                 random_state=self.random_state,
-                passes=10,
-                alpha='auto',
-                eta='auto'
+                passes=10
             )
             
-            # Calculate coherence
-            try:
+            # Store topic terms
+            for topic_id in range(self.num_topics):
+                self.topic_terms[topic_id] = self.model.show_topic(topic_id)
+            
+            # Calculate coherence if not already done
+            if self.coherence_score is None:
                 coherence_model = CoherenceModel(
-                    model=lda_model,
-                    texts=texts_tokens,
+                    model=self.model,
+                    texts=tokenized_texts,
                     dictionary=self.dictionary,
                     coherence='c_v'
                 )
-                coherence = coherence_model.get_coherence()
-                coherence_values.append(coherence)
-                logger.info(f"Num topics = {num_topics}, Coherence = {coherence:.4f}")
-            except Exception as e:
-                logger.warning(f"Error calculating coherence: {str(e)}")
-                coherence_values.append(0)
-        
-        # Store results
-        self.coherence_values = coherence_values
-        
-        # Find optimal number of topics
-        if coherence_values:
-            optimal_idx = np.argmax(coherence_values)
-            optimal_num_topics = topic_range[optimal_idx]
-            logger.info(f"Optimal number of topics: {optimal_num_topics}")
-        else:
-            optimal_num_topics = topic_range[len(topic_range) // 2]
-            logger.warning(f"No valid coherence values, defaulting to {optimal_num_topics} topics")
-        
-        # Reset to optimal number of topics and refit
-        self.num_topics = optimal_num_topics
-        
-        # Train final model with optimal number of topics
-        self.model = LdaModel(
-            corpus=self.corpus,
-            id2word=self.dictionary,
-            num_topics=optimal_num_topics,
-            random_state=self.random_state,
-            passes=10,
-            alpha='auto',
-            eta='auto'
-        )
-        
-        # Extract topics
-        self._extract_topics_from_gensim()
-        
-        return coherence_values, optimal_num_topics
-    
-    def plot_topic_coherence(self, topic_range=None):
-        """
-        Plot coherence values for different numbers of topics.
-        
-        Args:
-            topic_range: Range of topic numbers tried
-        """
-        if not self.coherence_values:
-            logger.warning("No coherence values to plot. Run optimize_num_topics() first.")
-            return
+                self.coherence_score = coherence_model.get_coherence()
             
-        if topic_range is None:
-            # Infer topic range from number of coherence values
-            topic_range = range(5, 5 * (len(self.coherence_values) + 1), 5)
-        
-        plt.figure(figsize=(10, 6))
-        plt.plot(topic_range, self.coherence_values, 'o-')
-        plt.xlabel('Number of Topics')
-        plt.ylabel('Coherence Score')
-        plt.title('Topic Coherence by Number of Topics')
-        plt.grid(True)
-        
-        return plt.gcf()
-    
-    def plot_topic_wordcloud(self, topic_id, top_n=30):
-        """
-        Plot wordcloud for a specific topic.
-        
-        Args:
-            topic_id: ID of the topic to visualize
-            top_n: Number of top terms to include
-        """
-        try:
-            from wordcloud import WordCloud
-        except ImportError:
-            logger.error("wordcloud package not available. Install with: pip install wordcloud")
-            return None
-        
-        if topic_id not in self.topic_terms:
-            logger.error(f"Topic {topic_id} not found")
-            return None
-        
-        # Get top terms and their weights
-        terms, weights = zip(*self.topic_terms[topic_id][:top_n])
-        
-        # Create a dictionary of word: weight
-        word_weights = dict(zip(terms, weights))
-        
-        # Create and configure the wordcloud object
-        wordcloud = WordCloud(
-            width=800, height=400,
-            background_color='white',
-            max_words=top_n,
-            prefer_horizontal=0.9,
-            collocations=False
-        ).generate_from_frequencies(word_weights)
-        
-        # Display the wordcloud
-        plt.figure(figsize=(10, 6))
-        plt.imshow(wordcloud, interpolation='bilinear')
-        plt.axis('off')
-        plt.title(f'Topic {topic_id} Word Cloud')
-        
-        return plt.gcf()
-    
-    def visualize_topics_pyldavis(self, output_file=None):
-        """
-        Create an interactive pyLDAvis visualization of the topics.
-        
-        Args:
-            output_file: Path to save the visualization (if None, return the HTML)
+        elif self.method == 'bertopic':
+            # Prepare data
+            data = self._prepare_bertopic_data(texts)
             
-        Returns:
-            HTML visualization if output_file is None, otherwise None
-        """
-        if not PYLDAVIS_AVAILABLE or not GENSIM_AVAILABLE:
-            logger.error("pyLDAvis and/or gensim not available")
-            return None
-        
-        if self.method != 'gensim_lda':
-            logger.error("pyLDAvis visualization only available for gensim LDA models")
-            return None
-        
-        if self.model is None or self.corpus is None or self.dictionary is None:
-            logger.error("Model, corpus, or dictionary not available")
-            return None
-        
-        try:
-            # Create the visualization
-            logger.info("Creating pyLDAvis visualization...")
-            vis = gensimvis.prepare(
-                self.model, self.corpus, self.dictionary,
-                mds='tsne', sort_topics=False
+            # Configure BERTopic
+            umap_model = UMAP(
+                n_neighbors=15,
+                n_components=5,
+                min_dist=0.0,
+                metric='cosine',
+                random_state=self.random_state
             )
             
-            # Save or return
-            if output_file:
-                pyLDAvis.save_html(vis, output_file)
-                logger.info(f"Visualization saved to {output_file}")
-                return None
+            hdbscan_model = HDBSCAN(
+                min_cluster_size=10,
+                metric='euclidean',
+                prediction_data=True
+            )
+            
+            # Initialize and train BERTopic model
+            self.model = BERTopic(
+                vectorizer_model=self.vectorizer,
+                umap_model=umap_model,
+                hdbscan_model=hdbscan_model,
+                language="english"
+            )
+            
+            # Fit model
+            topics, _ = self.model.fit_transform(data)
+            
+            # Store topic terms
+            for topic_id in self.model.get_topic_info()['Topic'].values:
+                if topic_id != -1:  # Skip outlier topic
+                    self.topic_terms[topic_id] = self.model.get_topic(topic_id)
+            
+        return self
+    
+    def transform(self, texts: List[str]) -> List[List[Tuple[int, float]]]:
+        """
+        Transform texts to topic distributions.
+        
+        Args:
+            texts: List of text documents
+            
+        Returns:
+            List of topic distributions for each document
+        """
+        if not texts:
+            logger.warning("Empty text list provided to transform()")
+            return []
+            
+        if self.model is None:
+            raise ValueError("Model not fitted. Call fit() first.")
+        
+        logger.info(f"Transforming {len(texts)} texts to topic distributions")
+        
+        if self.method == 'lda':
+            # Preprocess texts
+            tokenized_texts = self.preprocess(texts)
+            
+            # Convert to bag-of-words format
+            corpus = [self.dictionary.doc2bow(text) for text in tokenized_texts]
+            
+            # Get topic distributions
+            topic_distributions = [self.model[doc] for doc in corpus]
+            
+            return topic_distributions
+            
+        elif self.method == 'bertopic':
+            # For BERTopic, we need raw texts
+            topics, probs = self.model.transform(texts)
+            
+            # Convert to same format as LDA
+            topic_distributions = []
+            for i, topic in enumerate(topics):
+                if topic == -1:  # Outlier topic
+                    topic_distributions.append([])
+                else:
+                    # BERTopic gives a single topic with probability, convert to LDA-like format
+                    topic_distributions.append([(topic, probs[i][topic])])
+            
+            return topic_distributions
+    
+    def fit_transform(self, texts: List[str], optimize_topics: bool = False,
+                     topic_range: List[int] = None) -> List[List[Tuple[int, float]]]:
+        """
+        Fit model and transform texts in one step.
+        
+        Args:
+            texts: List of text documents
+            optimize_topics: Whether to optimize number of topics
+            topic_range: Range of topics to consider for optimization
+            
+        Returns:
+            List of topic distributions for each document
+        """
+        self.fit(texts, optimize_topics, topic_range)
+        return self.transform(texts)
+    
+    def get_topic_words(self, topic_id: int, num_words: int = 10) -> List[Tuple[str, float]]:
+        """
+        Get words for a specific topic.
+        
+        Args:
+            topic_id: Topic ID
+            num_words: Number of words to return
+            
+        Returns:
+            List of (word, probability) tuples
+        """
+        if self.model is None:
+            raise ValueError("Model not fitted. Call fit() first.")
+            
+        if self.method == 'lda':
+            return self.model.show_topic(topic_id, num_words)
+        elif self.method == 'bertopic':
+            if topic_id == -1:  # Outlier topic
+                return [("outlier", 1.0)]
+            return self.model.get_topic(topic_id)[:num_words]
+    
+    def get_topic_wordcloud(self, topic_id: int, width: int = 800, height: int = 400) -> str:
+        """
+        Generate a wordcloud for a specific topic.
+        
+        Args:
+            topic_id: Topic ID
+            width: Wordcloud width
+            height: Wordcloud height
+            
+        Returns:
+            Base64 encoded PNG wordcloud image
+        """
+        if self.model is None:
+            raise ValueError("Model not fitted. Call fit() first.")
+            
+        # Get topic words
+        if self.method == 'lda':
+            words = dict(self.model.show_topic(topic_id, 50))
+        elif self.method == 'bertopic':
+            if topic_id == -1:  # Outlier topic
+                words = {"outlier": 1.0}
             else:
-                return pyLDAvis.prepared_data_to_html(vis)
-        except Exception as e:
-            logger.error(f"Error creating pyLDAvis visualization: {str(e)}")
-            return None
+                words = dict(self.model.get_topic(topic_id)[:50])
+        
+        # Generate wordcloud
+        wordcloud = WordCloud(
+            width=width,
+            height=height,
+            background_color='white',
+            prefer_horizontal=0.9,
+            colormap='viridis',
+            random_state=self.random_state
+        ).generate_from_frequencies(words)
+        
+        # Convert wordcloud to image
+        plt.figure(figsize=(10, 5))
+        plt.imshow(wordcloud, interpolation="bilinear")
+        plt.axis("off")
+        plt.tight_layout(pad=0)
+        
+        # Save to buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png')
+        plt.close()
+        buf.seek(0)
+        
+        # Convert to base64
+        img_str = base64.b64encode(buf.read()).decode('utf-8')
+        
+        return f"data:image/png;base64,{img_str}"
+    
+    def extract_topics(self, texts: List[str]) -> List[Tuple[int, float]]:
+        """
+        Extract dominant topics for each document.
+        
+        Args:
+            texts: List of text documents
+            
+        Returns:
+            List of (topic_id, probability) for each document
+        """
+        if not texts:
+            logger.warning("Empty text list provided to extract_topics()")
+            return []
+            
+        # Transform texts to topic distributions
+        topic_distributions = self.transform(texts)
+        
+        # Extract dominant topics
+        dominant_topics = []
+        for dist in topic_distributions:
+            # Sort by probability and take first (most probable)
+            if dist:
+                sorted_dist = sorted(dist, key=lambda x: x[1], reverse=True)
+                dominant_topics.append(sorted_dist[0])
+            else:
+                dominant_topics.append((-1, 0.0))  # No topic
+        
+        return dominant_topics
+    
+    def visualize_topics(self) -> str:
+        """
+        Generate interactive topic visualization.
+        
+        Returns:
+            HTML for interactive visualization
+        """
+        if self.model is None:
+            raise ValueError("Model not fitted. Call fit() first.")
+            
+        if self.method == 'bertopic':
+            # BERTopic has built-in visualization
+            try:
+                # Use intertopic distance map
+                html = self.model.visualize_topics()
+                return html.to_html()
+            except:
+                logger.warning("Could not generate BERTopic visualization")
+                return ""
+        
+        return ""  # Default, no visualization
     
     def save(self, path: str) -> None:
         """
-        Save the topic model and related data.
+        Save the topic model to disk.
         
         Args:
             path: Directory path to save model
@@ -554,24 +500,30 @@ class TopicModeler:
             'method': self.method,
             'num_topics': self.num_topics,
             'random_state': self.random_state,
-            'coherence_values': self.coherence_values,
-            'perplexity_values': self.perplexity_values
+            'model_name': self.model_name,
+            'coherence_score': self.coherence_score,
+            'optimal_num_topics': self.optimal_num_topics
         }
         
-        joblib.dump(config, os.path.join(path, 'topic_model_config.joblib'))
-        
-        # Save model-specific components
-        if self.method in ['lda', 'nmf']:
-            joblib.dump(self.model, os.path.join(path, 'topic_model.joblib'))
-            if self.feature_names is not None:
-                joblib.dump(self.feature_names, os.path.join(path, 'feature_names.joblib'))
-        elif self.method == 'gensim_lda':
-            self.model.save(os.path.join(path, 'gensim_lda_model'))
-            if self.dictionary is not None:
-                self.dictionary.save(os.path.join(path, 'gensim_dictionary'))
+        joblib.dump(config, os.path.join(path, 'topic_config.joblib'))
         
         # Save topic terms
         joblib.dump(self.topic_terms, os.path.join(path, 'topic_terms.joblib'))
+        
+        # Save model-specific components
+        if self.method == 'lda':
+            # Save LDA model
+            if self.model is not None:
+                self.model.save(os.path.join(path, 'lda_model'))
+            
+            # Save dictionary
+            if self.dictionary is not None:
+                self.dictionary.save(os.path.join(path, 'dictionary'))
+            
+        elif self.method == 'bertopic':
+            # Save BERTopic model
+            if self.model is not None:
+                self.model.save(os.path.join(path, 'bertopic_model'))
         
         logger.info(f"Topic model saved to {path}")
     
@@ -586,31 +538,47 @@ class TopicModeler:
         Returns:
             Loaded TopicModeler instance
         """
-        config = joblib.load(os.path.join(path, 'topic_model_config.joblib'))
+        config = joblib.load(os.path.join(path, 'topic_config.joblib'))
         
         instance = cls(
             method=config['method'],
             num_topics=config['num_topics'],
-            random_state=config['random_state']
+            random_state=config['random_state'],
+            model_name=config['model_name']
         )
         
-        instance.coherence_values = config['coherence_values']
-        instance.perplexity_values = config['perplexity_values']
-        
-        # Load model-specific components
-        if instance.method in ['lda', 'nmf']:
-            instance.model = joblib.load(os.path.join(path, 'topic_model.joblib'))
-            if os.path.exists(os.path.join(path, 'feature_names.joblib')):
-                instance.feature_names = joblib.load(os.path.join(path, 'feature_names.joblib'))
-        elif instance.method == 'gensim_lda':
-            if not GENSIM_AVAILABLE:
-                raise ImportError("gensim is required to load this model")
-            instance.model = LdaModel.load(os.path.join(path, 'gensim_lda_model'))
-            if os.path.exists(os.path.join(path, 'gensim_dictionary')):
-                instance.dictionary = Dictionary.load(os.path.join(path, 'gensim_dictionary'))
+        instance.coherence_score = config['coherence_score']
+        instance.optimal_num_topics = config['optimal_num_topics']
         
         # Load topic terms
-        instance.topic_terms = joblib.load(os.path.join(path, 'topic_terms.joblib'))
+        if os.path.exists(os.path.join(path, 'topic_terms.joblib')):
+            instance.topic_terms = joblib.load(os.path.join(path, 'topic_terms.joblib'))
+        
+        # Load method-specific components
+        if instance.method == 'lda':
+            # Check if gensim is available
+            if not GENSIM_AVAILABLE:
+                logger.warning("Gensim not available, cannot load LDA model")
+                return instance
+            
+            # Load dictionary
+            if os.path.exists(os.path.join(path, 'dictionary')):
+                instance.dictionary = Dictionary.load(os.path.join(path, 'dictionary'))
+                instance.id2word = instance.dictionary
+            
+            # Load LDA model
+            if os.path.exists(os.path.join(path, 'lda_model')):
+                instance.model = LdaModel.load(os.path.join(path, 'lda_model'))
+            
+        elif instance.method == 'bertopic':
+            # Check if BERTopic is available
+            if not BERTOPIC_AVAILABLE:
+                logger.warning("BERTopic not available, cannot load BERTopic model")
+                return instance
+            
+            # Load BERTopic model
+            if os.path.exists(os.path.join(path, 'bertopic_model')):
+                instance.model = BERTopic.load(os.path.join(path, 'bertopic_model'))
         
         logger.info(f"Topic model loaded from {path}")
         return instance

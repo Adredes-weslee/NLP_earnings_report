@@ -1,225 +1,279 @@
-# main.py
-# Main script for orchestrating the earnings announcement analysis workflow
+"""
+Main entry point for the Enhanced NLP Earnings Report Analysis.
+This script provides the main command-line interface for running the pipeline.
+"""
 
 import os
 import sys
+import logging
 import argparse
-import pandas as pd
-import numpy as np
+from datetime import datetime
+import subprocess
 
-# Add the current directory to the path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Initialize logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("nlp_earnings_pipeline.log"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger('nlp_earnings_main')
 
-# Import modules
-from config import (OUTPUT_DIR, MODEL_DIR, OPTIMAL_TOPICS, RANDOM_STATE)
-from data_processor import load_data, process_data
-from feature_extractor import (create_document_term_matrix, tune_lda_topics, 
-                            plot_topic_coherence, fit_lda_model, get_top_words)
-from model_trainer import train_lasso_model, train_classifiers
-from utils import (plot_topic_words, plot_lasso_coefficients, generate_summary_report)
-
+# Import pipeline components
+from data.pipeline import DataPipeline
+from nlp.embedding import EmbeddingProcessor
+from nlp.sentiment import SentimentAnalyzer
+from nlp.topic_modeling import TopicModeler
+from nlp.feature_extraction import FeatureExtractor
 
 def setup_directories():
-    """Create necessary directories for outputs and models"""
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    print(f"Created output directories: {OUTPUT_DIR} and {MODEL_DIR}")
+    """Create necessary directories for output files."""
+    os.makedirs("models", exist_ok=True)
+    os.makedirs("models/embeddings", exist_ok=True)
+    os.makedirs("models/sentiment", exist_ok=True)
+    os.makedirs("models/topics", exist_ok=True)
+    os.makedirs("models/features", exist_ok=True)
+    os.makedirs("results", exist_ok=True)
+    os.makedirs("results/figures", exist_ok=True)
+    logger.info("Created output directories")
 
-
-def run_data_processing(data_path=None, force_reprocess=False):
-    """
-    Load and process the raw data
+def run_data_pipeline(args):
+    """Run the data preprocessing pipeline."""
+    logger.info("Starting data pipeline")
     
-    Args:
-        data_path (str, optional): Path to the data file
-        force_reprocess (bool): Whether to force reprocessing even if processed file exists
+    try:
+        # Create and run pipeline
+        pipeline = DataPipeline(
+            input_file=args.input_file,
+            text_column=args.text_column,
+            output_dir=args.output_dir,
+            train_ratio=args.train_ratio,
+            val_ratio=args.val_ratio,
+            seed=args.seed
+        )
         
-    Returns:
-        pandas.DataFrame: Processed data
-    """
-    processed_file = "./task2_data_clean.csv.gz"
-    
-    if os.path.exists(processed_file) and not force_reprocess:
-        print(f"Loading pre-processed data from {processed_file}")
-        return pd.read_csv(processed_file)
-    
-    print("Loading and processing raw data...")
-    df = load_data(data_path)
-    processed_df = process_data(df, save_path=processed_file)
-    
-    return processed_df
-
-
-def run_topic_modeling(df, n_topics=None, tune_topics=True):
-    """
-    Run topic modeling on the processed data
-    
-    Args:
-        df (pandas.DataFrame): Processed data
-        n_topics (int, optional): Number of topics to use
-        tune_topics (bool): Whether to tune the number of topics
+        # Run pipeline stages
+        pipeline.load_data()
+        pipeline.clean_text()
+        pipeline.compute_text_statistics()
+        pipeline.process_financial_data()
+        pipeline.generate_labels()
+        pipeline.split_data()
+        version_id = pipeline.save_splits()
         
-    Returns:
-        tuple: (LDA model, topic distribution matrix, vocabulary)
-    """
-    print("Creating document-term matrix...")
-    dtm, vec, vocab = create_document_term_matrix(
-        df['clean_sent'],
-        save_path=os.path.join(MODEL_DIR, 'vectorizer.pkl')
-    )
+        logger.info(f"Data pipeline completed successfully. Version: {version_id}")
+        return version_id
     
-    if tune_topics:
-        print("Tuning LDA topics...")
-        records = tune_lda_topics(dtm, vocab)
+    except Exception as e:
+        logger.error(f"Error in data pipeline: {str(e)}")
+        raise
+
+def run_nlp_analysis(args, version_id=None):
+    """Run the advanced NLP analysis."""
+    logger.info("Starting NLP analysis")
+    
+    try:
+        # Load the data
+        pipeline = DataPipeline()
+        if version_id is None:
+            # Get the latest version
+            from data.data_versioner import DataVersioner
+            versioner = DataVersioner()
+            version_id = versioner.get_latest_version()
+            
+            if version_id is None:
+                logger.error("No data versions found. Run data pipeline first.")
+                return False
         
-        print("Plotting topic coherence...")
-        optimal_topics, _ = plot_topic_coherence(records)
+        logger.info(f"Using data version: {version_id}")
+        data_paths = pipeline.get_data_paths(version_id)
         
-        print(f"Optimal number of topics: {optimal_topics}")
-    else:
-        optimal_topics = n_topics or OPTIMAL_TOPICS
-        print(f"Using specified number of topics: {optimal_topics}")
-    
-    print(f"Fitting final LDA model with {optimal_topics} topics...")
-    lda_model, topics = fit_lda_model(dtm, n_topics=optimal_topics)
-    
-    print("Extracting top words per topic...")
-    topics_words = get_top_words(lda_model, vocab)
-    
-    # Visualize topics
-    print("Visualizing top topics...")
-    plot_topic_words(lda_model, vocab, topics_to_show=range(min(20, optimal_topics)))
-    
-    return lda_model, topics, vec.get_feature_names_out(), topics_words
-
-
-def run_lasso_regression(topics, returns):
-    """
-    Run Lasso regression to identify topics that best predict returns
-    
-    Args:
-        topics (numpy.ndarray): Topic distribution matrix
-        returns (pandas.Series): Stock returns
+        # Load the split datasets
+        import pandas as pd
+        train_df = pd.read_csv(data_paths['train'])
+        val_df = pd.read_csv(data_paths['val'])
+        test_df = pd.read_csv(data_paths['test'])
         
-    Returns:
-        tuple: (Lasso model, results dictionary, nonzero topics indices)
-    """
-    print("Training Lasso regression model...")
-    lasso_model, lasso_results, nonzero_topics = train_lasso_model(topics, returns)
-    
-    print("Visualizing Lasso coefficients...")
-    plot_lasso_coefficients(lasso_model.coef_)
-    
-    return lasso_model, lasso_results, nonzero_topics
-
-
-def run_classification(topics, returns):
-    """
-    Train and evaluate classifiers to predict large positive returns
-    
-    Args:
-        topics (numpy.ndarray): Topic distribution matrix
-        returns (pandas.Series): Stock returns
+        logger.info(f"Loaded {len(train_df)} training, {len(val_df)} validation, and {len(test_df)} test samples")
         
-    Returns:
-        tuple: (Best model, results dictionary)
-    """
-    print("Training classification models...")
-    best_classifier, classifier_results = train_classifiers(topics, returns)
-    
-    best_model_name = max(classifier_results, key=lambda x: classifier_results[x]['test_f1_macro'])
-    best_f1 = classifier_results[best_model_name]['test_f1_macro']
-    
-    print(f"Best model: {best_model_name} with F1 score: {best_f1:.4f}")
-    
-    return best_classifier, classifier_results
-
-
-def generate_report(lda_model, lasso_results, classifier_results, topics_words):
-    """
-    Generate a comprehensive analysis report
-    
-    Args:
-        lda_model: Fitted LDA model
-        lasso_results (dict): Results from Lasso regression
-        classifier_results (dict): Results from classifier training
-        topics_words (dict): Dictionary mapping topic indices to lists of top words
+        # 1. Create and train embedding processor
+        logger.info("Training embedding processor")
+        embedding_processor = EmbeddingProcessor(method=args.embedding_method)
+        texts = train_df['processed_text'].fillna('').tolist()
+        embedding_processor.fit(texts, max_features=args.max_features)
         
-    Returns:
-        str: Report text
-    """
-    print("Generating analysis report...")
-    
-    lda_results = {
-        'n_topics': lda_model.n_components,
-        'coherence_score': -0.97  # Placeholder, would be from actual results
-    }
-    
-    report_text = generate_summary_report(
-        lda_results, lasso_results, classifier_results, topics_words
-    )
-    
-    print(f"Report generated and saved to {os.path.join(OUTPUT_DIR, 'analysis_report.md')}")
-    
-    return report_text
-
-
-def run_full_pipeline(data_path=None, n_topics=None, force_reprocess=False, tune_topics=True):
-    """
-    Run the complete analysis pipeline
-    
-    Args:
-        data_path (str, optional): Path to the data file
-        n_topics (int, optional): Number of topics to use
-        force_reprocess (bool): Whether to force reprocessing even if processed file exists
-        tune_topics (bool): Whether to tune the number of topics
+        # Save the embedding processor
+        embedding_processor.save(f'models/embeddings/{args.embedding_method}_{args.max_features}')
         
-    Returns:
-        None
-    """
-    print("Starting earnings announcement analysis pipeline...")
+        # 2. Initialize sentiment analyzer
+        logger.info("Initializing sentiment analyzer")
+        sentiment_analyzer = SentimentAnalyzer(method=args.sentiment_method)
+        
+        # Save the sentiment analyzer
+        sentiment_analyzer.save(f'models/sentiment/{args.sentiment_method}')
+        
+        # 3. Create and train topic model
+        logger.info(f"Training topic model with {args.num_topics} topics")
+        # Get document-term matrix from embedding processor
+        dtm = embedding_processor.vectorizer.transform(texts)
+        feature_names = embedding_processor.vocab
+        
+        topic_modeler = TopicModeler(method=args.topic_method, num_topics=args.num_topics)
+        topic_modeler.fit(dtm, feature_names)
+        
+        # Save the topic model
+        topic_modeler.save(f'models/topics/{args.topic_method}_model')
+        
+        # 4. Feature extraction and model training
+        logger.info("Extracting features and training models")
+        feature_extractor = FeatureExtractor()
+        feature_extractor.set_embedding_processor(embedding_processor)
+        feature_extractor.set_sentiment_analyzer(sentiment_analyzer)
+        feature_extractor.set_topic_modeler(topic_modeler)
+        
+        # Extract features from training data
+        X_train, feature_names = feature_extractor.extract_features(
+            train_df, 
+            text_column='processed_text',
+            include_embeddings=True,
+            include_topics=True,
+            include_sentiment=True
+        )
+        
+        # Train regression model if target exists
+        if 'BHAR0_2' in train_df.columns:
+            y_reg_train = train_df['BHAR0_2'].values
+            
+            from sklearn.linear_model import Lasso
+            lasso = Lasso(alpha=0.001, max_iter=10000)
+            lasso.fit(X_train, y_reg_train)
+            
+            # Set feature importances
+            feature_extractor.set_feature_importances(lasso.coef_, feature_names)
+            
+            # Save feature extractor
+            feature_extractor.save('models/features/combined_features')
+            
+            # Print top features
+            logger.info("Top predictive features:")
+            top_features = feature_extractor.get_top_features(n=10)
+            for _, row in top_features.iterrows():
+                logger.info(f"{row['feature']}: {row['importance']:.6f}")
+        
+        logger.info("NLP analysis completed successfully")
+        return True
     
-    # Step 1: Setup directories
-    setup_directories()
-    
-    # Step 2: Data processing
-    df = run_data_processing(data_path, force_reprocess)
-    print(f"Data processed successfully. Shape: {df.shape}")
-    
-    # Step 3: Topic modeling
-    lda_model, topics, vocab, topics_words = run_topic_modeling(df, n_topics, tune_topics)
-    print("Topic modeling completed successfully.")
-    
-    # Step 4: Lasso regression
-    lasso_model, lasso_results, nonzero_topics = run_lasso_regression(topics, df['BHAR0_2'])
-    print("Lasso regression analysis completed successfully.")
-    
-    # Step 5: Classification
-    best_classifier, classifier_results = run_classification(topics, df['BHAR0_2'])
-    print("Classification analysis completed successfully.")
-    
-    # Step 6: Generate report
-    report = generate_report(lda_model, lasso_results, classifier_results, topics_words)
-    
-    print("\nAnalysis pipeline completed successfully!")
-    print(f"Results and models saved to {OUTPUT_DIR} and {MODEL_DIR}")
-    
-    return None
+    except Exception as e:
+        logger.error(f"Error in NLP analysis: {str(e)}")
+        raise
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Earnings Announcement Analysis Pipeline")
+def run_dashboard():
+    """Launch the Streamlit dashboard."""
+    logger.info("Launching Streamlit dashboard")
     
-    parser.add_argument("--data-path", type=str, help="Path to the data file")
-    parser.add_argument("--n-topics", type=int, help="Number of topics for LDA")
-    parser.add_argument("--force-reprocess", action="store_true", help="Force data reprocessing")
-    parser.add_argument("--no-tune-topics", action="store_true", help="Skip topic tuning")
+    try:
+        # Check if Streamlit is installed
+        subprocess.run([sys.executable, "-m", "pip", "install", "streamlit"], 
+                      check=True, stdout=subprocess.PIPE)
+        
+        # Launch the dashboard
+        dashboard_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "streamlit_app.py")
+        subprocess.Popen([sys.executable, "-m", "streamlit", "run", dashboard_path])
+        
+        logger.info(f"Dashboard launched: {dashboard_path}")
+        return True
+    
+    except Exception as e:
+        logger.error(f"Error launching dashboard: {str(e)}")
+        return False
+
+def main():
+    """Main entry point function."""
+    parser = argparse.ArgumentParser(description='Enhanced NLP Earnings Report Analysis')
+    
+    # Add arguments
+    parser.add_argument('--action', type=str, default='all',
+                        choices=['data', 'nlp', 'dashboard', 'all'],
+                        help='Action to perform: data processing, nlp analysis, launch dashboard, or all')
+    
+    # Data pipeline arguments
+    parser.add_argument('--input_file', type=str, default='data/ExpTask2Data.csv.gz',
+                        help='Path to input data file')
+    parser.add_argument('--text_column', type=str, default='sent',
+                        help='Name of text column in input data')
+    parser.add_argument('--output_dir', type=str, default='data/processed',
+                        help='Output directory for processed data')
+    parser.add_argument('--train_ratio', type=float, default=0.7,
+                        help='Ratio of data for training')
+    parser.add_argument('--val_ratio', type=float, default=0.15,
+                        help='Ratio of data for validation')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for reproducibility')
+    
+    # NLP analysis arguments
+    parser.add_argument('--embedding_method', type=str, default='tfidf',
+                        choices=['tfidf', 'count', 'word2vec', 'transformer'],
+                        help='Method for text embedding')
+    parser.add_argument('--max_features', type=int, default=5000,
+                        help='Maximum number of features for text vectorization')
+    parser.add_argument('--sentiment_method', type=str, default='loughran_mcdonald',
+                        choices=['loughran_mcdonald', 'textblob', 'vader', 'transformer', 'combined'],
+                        help='Method for sentiment analysis')
+    parser.add_argument('--topic_method', type=str, default='lda',
+                        choices=['lda', 'nmf', 'gensim_lda'],
+                        help='Method for topic modeling')
+    parser.add_argument('--num_topics', type=int, default=40,
+                        help='Number of topics for topic modeling')
     
     args = parser.parse_args()
     
-    run_full_pipeline(
-        data_path=args.data_path,
-        n_topics=args.n_topics,
-        force_reprocess=args.force_reprocess,
-        tune_topics=not args.no_tune_topics
-    )
+    # Create output directories
+    setup_directories()
+    
+    # Run requested actions
+    if args.action in ['data', 'all']:
+        try:
+            version_id = run_data_pipeline(args)
+            logger.info(f"Data pipeline completed successfully with version: {version_id}")
+        except Exception as e:
+            logger.error(f"Data pipeline failed: {str(e)}")
+            if args.action == 'data':
+                return
+    else:
+        version_id = None
+    
+    if args.action in ['nlp', 'all']:
+        try:
+            success = run_nlp_analysis(args, version_id)
+            if success:
+                logger.info("NLP analysis completed successfully")
+            else:
+                logger.error("NLP analysis failed")
+                if args.action == 'nlp':
+                    return
+        except Exception as e:
+            logger.error(f"NLP analysis failed: {str(e)}")
+            if args.action == 'nlp':
+                return
+    
+    if args.action in ['dashboard', 'all']:
+        try:
+            success = run_dashboard()
+            if success:
+                logger.info("Dashboard launched successfully")
+            else:
+                logger.error("Failed to launch dashboard")
+        except Exception as e:
+            logger.error(f"Dashboard launch failed: {str(e)}")
+
+if __name__ == "__main__":
+    start_time = datetime.now()
+    logger.info(f"Starting Enhanced NLP Earnings Report Analysis at {start_time}")
+    
+    main()
+    
+    end_time = datetime.now()
+    duration = end_time - start_time
+    logger.info(f"Analysis completed in {duration}")

@@ -66,12 +66,12 @@ def test_embedding_processor(train_df, val_df):
     embedding_processor = EmbeddingProcessor(method='tfidf')
     
     # Fit on training data
-    texts = train_df['processed_text'].fillna('').tolist()
+    texts = train_df['ea_text'].fillna('').tolist()
     embedding_processor.fit(texts, max_features=5000)
     
     # Transform training and validation data
     train_embeddings = embedding_processor.transform(texts)
-    val_texts = val_df['processed_text'].fillna('').tolist()
+    val_texts = val_df['ea_text'].fillna('').tolist()
     val_embeddings = embedding_processor.transform(val_texts)
     
     logger.info(f"Training embeddings shape: {train_embeddings.shape}")
@@ -92,7 +92,7 @@ def test_sentiment_analyzer(train_df):
     
     # Analyze a sample of texts
     sample_size = min(100, len(train_df))
-    sample_texts = train_df['processed_text'].head(sample_size).fillna('').tolist()
+    sample_texts = train_df['ea_text'].head(sample_size).fillna('').tolist()
     
     # Get sentiment scores
     sentiment_df = sentiment_analyzer.batch_analyze(sample_texts)
@@ -114,7 +114,7 @@ def test_topic_modeling(train_df, embedding_processor):
     logger.info("Testing topic modeling...")
     
     # Get document-term matrix from embedding processor
-    texts = train_df['processed_text'].fillna('').tolist()
+    texts = train_df['ea_text'].fillna('').tolist()
     dtm = embedding_processor.vectorizer.transform(texts)
     feature_names = embedding_processor.vocab
     
@@ -167,7 +167,7 @@ def test_feature_extraction(train_df, val_df, embedding_processor, sentiment_ana
     # Extract features from training data
     X_train, feature_names = feature_extractor.extract_features(
         train_df, 
-        text_column='processed_text',
+        text_column='ea_text',
         include_embeddings=True,
         include_topics=True,
         include_sentiment=True
@@ -179,7 +179,7 @@ def test_feature_extraction(train_df, val_df, embedding_processor, sentiment_ana
     # Extract features from validation data
     X_val, _ = feature_extractor.extract_features(
         val_df,
-        text_column='processed_text'
+        text_column='ea_text'
     )
     
     logger.info(f"Validation feature matrix shape: {X_val.shape}")

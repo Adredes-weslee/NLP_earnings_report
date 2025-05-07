@@ -5,13 +5,17 @@ Utility functions for the NLP earnings report dashboard.
 import os
 import sys
 import logging
+import json
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Dict, List, Any, Tuple, Optional
-import pickle
-import io
 import base64
+from io import BytesIO
+from typing import Dict, List, Any, Tuple, Optional
+from datetime import datetime
+from wordcloud import WordCloud
+
+logger = logging.getLogger('dashboard.utils')
 
 # Add the parent directory to Python path for imports
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -24,261 +28,407 @@ from nlp.sentiment import SentimentAnalyzer
 from nlp.topic_modeling import TopicModeler
 from nlp.feature_extraction import FeatureExtractor
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("dashboard_utils.log"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger('dashboard_utils')
 
 def load_models() -> Dict[str, Any]:
     """
-    Load pre-trained models for use in the dashboard.
+    Load all available models for the dashboard.
     
     Returns:
-        Dict[str, Any]: Dictionary containing loaded models and data
+        Dict[str, Any]: Dictionary of loaded models.
     """
     models = {}
     
     try:
+        # Try to load embedding model
+        try:
+            models['embedding'] = EmbeddingProcessor()
+            logger.info("Embedding model loaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to load embedding model: {str(e)}")
+        
+        # Try to load sentiment model
+        try:
+            models['sentiment'] = SentimentAnalyzer()
+            logger.info("Sentiment model loaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to load sentiment model: {str(e)}")
+        
+        # Try to load topic model
+        try:
+            models['topic'] = TopicModeler()
+            logger.info("Topic model loaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to load topic model: {str(e)}")
+        
+        # Try to load feature extractor
+        try:
+            models['feature_extractor'] = FeatureExtractor()
+            logger.info("Feature extractor loaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to load feature extractor: {str(e)}")
+        
         # Try to load sample data
         try:
-            sample_data_path = "data/processed/train_edad7fda80.csv"
+            # Check if sample data exists
+            sample_data_path = os.path.join(parent_dir, '..', 'data', 'processed', 'train_edad7fda80.csv')
             if os.path.exists(sample_data_path):
                 models['sample_data'] = pd.read_csv(sample_data_path)
-                logger.info(f"Loaded sample data: {len(models['sample_data'])} samples")
+                logger.info(f"Loaded {len(models['sample_data'])} sample data records")
             else:
-                # Try to load from data directory
-                data_files = [f for f in os.listdir("data/processed") 
-                              if f.endswith('.csv') and f.startswith('train_')]
-                if data_files:
-                    models['sample_data'] = pd.read_csv(f"data/processed/{data_files[0]}")
-                    logger.info(f"Loaded alternative sample data: {len(models['sample_data'])} samples")
+                logger.warning(f"Sample data file not found at {sample_data_path}")
         except Exception as e:
-            logger.warning(f"Could not load sample data: {str(e)}")
+            logger.warning(f"Failed to load sample data: {str(e)}")
         
-        # Load embedding model
-        try:
-            embedding_dir = "models/embeddings"
-            if os.path.exists(embedding_dir):
-                embedding_models = [f for f in os.listdir(embedding_dir) 
-                                   if os.path.isdir(os.path.join(embedding_dir, f))]
-                if embedding_models:
-                    models['embedding'] = EmbeddingProcessor.load(os.path.join(embedding_dir, embedding_models[0]))
-                    logger.info(f"Loaded embedding model: {embedding_models[0]}")
-        except Exception as e:
-            logger.warning(f"Could not load embedding model: {str(e)}")
-        
-        # Load sentiment model
-        try:
-            sentiment_dir = "models/sentiment"
-            if os.path.exists(sentiment_dir):
-                sentiment_models = [f for f in os.listdir(sentiment_dir) 
-                                   if os.path.isdir(os.path.join(sentiment_dir, f))]
-                if sentiment_models:
-                    models['sentiment'] = SentimentAnalyzer.load(os.path.join(sentiment_dir, sentiment_models[0]))
-                    logger.info(f"Loaded sentiment model: {sentiment_models[0]}")
-                else:
-                    # Create a default sentiment analyzer
-                    models['sentiment'] = SentimentAnalyzer(method="loughran_mcdonald")
-                    logger.info("Created default LM sentiment analyzer")
-        except Exception as e:
-            logger.warning(f"Could not load sentiment model: {str(e)}")
-            # Create a default sentiment analyzer
-            models['sentiment'] = SentimentAnalyzer(method="loughran_mcdonald")
-        
-        # Load topic model
-        try:
-            topic_dir = "models/topics"
-            if os.path.exists(topic_dir):
-                topic_models = [f for f in os.listdir(topic_dir) 
-                               if os.path.isdir(os.path.join(topic_dir, f))]
-                if topic_models:
-                    models['topic'] = TopicModeler.load(os.path.join(topic_dir, topic_models[0]))
-                    logger.info(f"Loaded topic model: {topic_models[0]}")
-        except Exception as e:
-            logger.warning(f"Could not load topic model: {str(e)}")
-        
-        # Load feature extractor
-        try:
-            feature_dir = "models/features"
-            if os.path.exists(feature_dir):
-                feature_models = [f for f in os.listdir(feature_dir) 
-                                 if os.path.isdir(os.path.join(feature_dir, f))]
-                if feature_models:
-                    models['feature_extractor'] = FeatureExtractor.load(os.path.join(feature_dir, feature_models[0]))
-                    logger.info(f"Loaded feature extractor: {feature_models[0]}")
-        except Exception as e:
-            logger.warning(f"Could not load feature extractor: {str(e)}")
-    
     except Exception as e:
-        logger.error(f"Error loading models: {str(e)}")
+        logger.error(f"Error in load_models: {str(e)}")
     
     return models
 
-def format_topics(topic_model: TopicModeler, num_topics: int = 10, num_words: int = 10) -> pd.DataFrame:
+
+def get_available_models() -> Dict[str, List[Dict[str, Any]]]:
     """
-    Format topic model output for display.
-    
-    Args:
-        topic_model: Trained topic model
-        num_topics: Number of topics to display
-        num_words: Number of words per topic to display
+    Get list of all available models in the model zoo.
     
     Returns:
-        pd.DataFrame: DataFrame with formatted topic information
+        Dict[str, List[Dict[str, Any]]]: Dictionary of available models by type.
     """
-    if topic_model is None:
+    model_types = {
+        'embedding': [],
+        'sentiment': [],
+        'topic': [],
+        'feature_extractor': []
+    }
+    
+    # In a real application, this would search a models directory
+    # For now, we'll add some demo models
+    
+    # Add embedding models
+    model_types['embedding'].append({
+        'name': 'FinBERT Embeddings',
+        'description': 'Financial domain-specific BERT embeddings',
+        'version': '1.0.0',
+        'created_at': '2023-10-15'
+    })
+    
+    model_types['embedding'].append({
+        'name': 'Sentence Transformer',
+        'description': 'General purpose sentence embeddings',
+        'version': '2.0.0',
+        'created_at': '2023-11-22'
+    })
+    
+    # Add sentiment models
+    model_types['sentiment'].append({
+        'name': 'Financial Lexicon Analyzer',
+        'description': 'Finance-specific sentiment lexicon',
+        'version': '1.2.0',
+        'created_at': '2023-09-05'
+    })
+    
+    model_types['sentiment'].append({
+        'name': 'Earnings Report Sentiment',
+        'description': 'Fine-tuned BERT model for earnings sentiment',
+        'version': '0.9.1',
+        'created_at': '2023-12-10'
+    })
+    
+    # Add topic models
+    model_types['topic'].append({
+        'name': 'LDA Topic Model',
+        'description': 'Latent Dirichlet Allocation model with 20 topics',
+        'version': '1.0.0',
+        'created_at': '2023-08-18'
+    })
+    
+    model_types['topic'].append({
+        'name': 'BERTopic Model',
+        'description': 'BERT embeddings with HDBSCAN clustering',
+        'version': '0.8.5',
+        'created_at': '2023-11-30'
+    })
+    
+    # Add feature extractors
+    model_types['feature_extractor'].append({
+        'name': 'Financial Metrics Extractor',
+        'description': 'Regex and rule-based financial metrics extraction',
+        'version': '1.1.0',
+        'created_at': '2023-10-02'
+    })
+    
+    model_types['feature_extractor'].append({
+        'name': 'NER-based Feature Extractor',
+        'description': 'Named Entity Recognition for financial metrics',
+        'version': '0.9.0',
+        'created_at': '2023-12-05'
+    })
+    
+    return model_types
+
+
+def format_topics(topic_model: TopicModeler) -> pd.DataFrame:
+    """
+    Format topic model data into a DataFrame for visualization.
+    
+    Args:
+        topic_model (TopicModeler): The topic model to format.
+        
+    Returns:
+        pd.DataFrame: Formatted DataFrame of topics.
+    """
+    if not hasattr(topic_model, 'num_topics') or not topic_model.num_topics:
         return pd.DataFrame()
     
-    num_topics = min(num_topics, topic_model.num_topics)
+    # Create a DataFrame with topic information
+    topics_data = []
     
-    try:
-        topics_df = pd.DataFrame(columns=['Topic ID', 'Top Words', 'Coherence'])
+    for i in range(topic_model.num_topics):
+        topic_dict = {
+            'topic_id': i,
+            'topic_label': f"Topic {i}",
+        }
         
-        for i in range(num_topics):
-            top_words = topic_model.get_topic_words(i, num_words)
-            if isinstance(top_words, list):
-                words_str = ", ".join(top_words)
-            else:
-                # Handle case where we get (word, score) tuples
-                words_str = ", ".join([f"{word}" for word in top_words])
-            
-            coherence = topic_model.get_topic_coherence(i) if hasattr(topic_model, 'get_topic_coherence') else None
-            
-            topics_df = pd.concat([topics_df, pd.DataFrame({
-                'Topic ID': [f"Topic {i}"],
-                'Top Words': [words_str],
-                'Coherence': [f"{coherence:.4f}" if coherence is not None else "N/A"]
-            })], ignore_index=True)
+        # Add topic words if available
+        if hasattr(topic_model, 'get_topic_words'):
+            words = topic_model.get_topic_words(i, top_n=10)
+            if isinstance(words, list):
+                if words and isinstance(words[0], tuple):
+                    # (word, score) format
+                    word_str = ", ".join([w[0] for w in words[:5]])
+                else:
+                    word_str = ", ".join(words[:5])
+                topic_dict['top_words'] = word_str
         
-        return topics_df
+        # Add topic weight/prevalence if available
+        if hasattr(topic_model, 'topic_weights'):
+            topic_dict['weight'] = topic_model.topic_weights[i]
+        
+        topics_data.append(topic_dict)
     
-    except Exception as e:
-        logger.error(f"Error formatting topics: {str(e)}")
-        return pd.DataFrame()
+    return pd.DataFrame(topics_data)
 
-def classify_sentiment(text: str, sentiment_analyzer: SentimentAnalyzer) -> Dict[str, float]:
+
+def classify_sentiment(text: str, sentiment_model: SentimentAnalyzer) -> Dict[str, float]:
     """
-    Analyze sentiment of a text.
+    Classify sentiment using the sentiment model.
     
     Args:
-        text: Text to analyze
-        sentiment_analyzer: Sentiment analyzer to use
-    
+        text (str): Text to analyze.
+        sentiment_model (SentimentAnalyzer): The sentiment model to use.
+        
     Returns:
-        Dict[str, float]: Dictionary of sentiment scores
+        Dict[str, float]: Dictionary of sentiment scores.
     """
-    if not text or sentiment_analyzer is None:
-        return {}
-    
-    try:
-        result = sentiment_analyzer.analyze(text)
-        return result
-    except Exception as e:
-        logger.error(f"Error in sentiment analysis: {str(e)}")
-        return {}
+    return sentiment_model.analyze(text)
 
-def format_sentiment_result(sentiment_result: Dict[str, float]) -> pd.DataFrame:
+
+def format_sentiment_result(result: Dict[str, float]) -> pd.DataFrame:
     """
-    Format sentiment analysis results for display.
+    Format sentiment result for visualization.
     
     Args:
-        sentiment_result: Results from sentiment analysis
-    
+        result (Dict[str, float]): Sentiment analysis results.
+        
     Returns:
-        pd.DataFrame: Formatted sentiment results
+        pd.DataFrame: Formatted DataFrame of sentiment results.
     """
-    if not sentiment_result:
-        return pd.DataFrame({'Dimension': ['No results'], 'Score': [0.0]})
+    # Convert to DataFrame for easier visualization
+    sentiment_df = pd.DataFrame({
+        'Dimension': list(result.keys()),
+        'Score': list(result.values())
+    })
     
-    try:
-        # Format the results as a DataFrame
-        result_df = pd.DataFrame({
-            'Dimension': list(sentiment_result.keys()),
-            'Score': list(sentiment_result.values())
-        })
-        
-        # Sort by score magnitude
-        result_df['AbsScore'] = result_df['Score'].abs()
-        result_df = result_df.sort_values('AbsScore', ascending=False).drop('AbsScore', axis=1)
-        
-        return result_df
-    except Exception as e:
-        logger.error(f"Error formatting sentiment result: {str(e)}")
-        return pd.DataFrame({'Error': ['Error formatting results']})
+    # Sort by absolute value of score to show strongest sentiments first
+    sentiment_df['AbsScore'] = abs(sentiment_df['Score'])
+    sentiment_df = sentiment_df.sort_values('AbsScore', ascending=False)
+    sentiment_df = sentiment_df.drop('AbsScore', axis=1)
+    
+    return sentiment_df
 
-def extract_topic_visualization(topic_model: TopicModeler) -> Optional[str]:
+
+def extract_topic_visualization(topic_model: TopicModeler) -> str:
     """
-    Extract interactive visualization HTML for topics.
+    Extract interactive visualization HTML from topic model if available.
     
     Args:
-        topic_model: Topic model
-    
+        topic_model (TopicModeler): The topic model.
+        
     Returns:
-        Optional[str]: HTML visualization or None
+        str: HTML string of visualization or empty string if not available.
     """
-    if topic_model is None or not hasattr(topic_model, 'get_visualization_html'):
+    if hasattr(topic_model, 'get_visualization_html'):
+        return topic_model.get_visualization_html()
+    return ""
+
+
+def get_feature_importance_plot(feature_extractor: FeatureExtractor) -> Optional[plt.Figure]:
+    """
+    Get feature importance plot from feature extractor.
+    
+    Args:
+        feature_extractor (FeatureExtractor): The feature extractor.
+        
+    Returns:
+        Optional[plt.Figure]: Matplotlib figure or None if not available.
+    """
+    if not hasattr(feature_extractor, 'get_feature_importance'):
         return None
     
+    # Get feature importance data
     try:
-        html = topic_model.get_visualization_html()
-        return html
-    except Exception as e:
-        logger.error(f"Error getting topic visualization: {str(e)}")
-        return None
-
-def get_feature_importance_plot(feature_extractor: FeatureExtractor, n: int = 20) -> Optional[plt.Figure]:
-    """
-    Generate a plot of feature importances.
-    
-    Args:
-        feature_extractor: Feature extractor with importances
-        n: Number of top features to show
-    
-    Returns:
-        Optional[plt.Figure]: Matplotlib figure or None
-    """
-    if feature_extractor is None or not hasattr(feature_extractor, 'feature_importances'):
-        return None
-    
-    try:
-        # Get top features by absolute importance
-        top_features = feature_extractor.get_top_features(n=n)
+        feature_importance = feature_extractor.get_feature_importance()
         
-        if top_features is None or top_features.empty:
+        if not feature_importance:
             return None
         
         # Create figure
-        fig, ax = plt.subplots(figsize=(12, 8))
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Sort by importance
+        if isinstance(feature_importance, dict):
+            features = list(feature_importance.keys())
+            importance = list(feature_importance.values())
+        else:
+            # Assume it's a list of (feature, importance) tuples
+            features = [f[0] for f in feature_importance]
+            importance = [f[1] for f in feature_importance]
+            
+        # Sort features by importance
+        sorted_idx = np.argsort(importance)
+        features = [features[i] for i in sorted_idx[-15:]]  # Top 15 features
+        importance = [importance[i] for i in sorted_idx[-15:]]
         
         # Plot horizontal bar chart
-        colors = ['green' if x > 0 else 'red' for x in top_features['importance']]
-        bars = ax.barh(top_features['feature'], top_features['importance'], color=colors)
-        
-        # Add labels
-        ax.set_title(f'Top {n} Feature Importances', fontsize=14)
-        ax.set_xlabel('Importance', fontsize=12)
-        ax.set_ylabel('Feature', fontsize=12)
-        
-        # Add a vertical line at x=0
-        ax.axvline(x=0, color='black', linestyle='-', alpha=0.3)
-        
-        # Add value labels
-        for bar in bars:
-            width = bar.get_width()
-            label_x_pos = width + 0.01 if width > 0 else width - 0.01
-            ax.text(label_x_pos, bar.get_y() + bar.get_height()/2, 
-                   f'{width:.4f}', va='center', ha='left' if width > 0 else 'right',
-                   fontsize=8)
+        ax.barh(features, importance)
+        ax.set_xlabel('Importance')
+        ax.set_ylabel('Feature')
+        ax.set_title('Feature Importance')
         
         plt.tight_layout()
         return fig
     
     except Exception as e:
-        logger.error(f"Error creating feature importance plot: {str(e)}")
+        logger.error(f"Error in get_feature_importance_plot: {str(e)}")
         return None
+
+
+def get_wordcloud_for_topic(topic_model: TopicModeler, topic_id: int) -> Optional[bytes]:
+    """
+    Generate a word cloud image for a topic.
+    
+    Args:
+        topic_model (TopicModeler): The topic model.
+        topic_id (int): Topic ID to visualize.
+        
+    Returns:
+        Optional[bytes]: Base64-encoded image or None if not available.
+    """
+    if not hasattr(topic_model, 'get_topic_words'):
+        return None
+    
+    try:
+        words = topic_model.get_topic_words(topic_id, top_n=50)
+        
+        if not words:
+            return None
+        
+        # Create word cloud
+        word_dict = {}
+        
+        if isinstance(words[0], tuple):
+            # (word, weight) format
+            for word, weight in words:
+                word_dict[word] = weight
+        else:
+            # Just words, use decreasing weights
+            for i, word in enumerate(words):
+                word_dict[word] = (len(words) - i) / len(words)
+        
+        # Generate word cloud
+        wordcloud = WordCloud(
+            width=800,
+            height=400,
+            background_color='white',
+            colormap='viridis',
+            max_words=100
+        ).generate_from_frequencies(word_dict)
+        
+        # Convert to image
+        img = wordcloud.to_image()
+        
+        # Save to buffer
+        buffer = BytesIO()
+        img.save(buffer, format='PNG')
+        buffer.seek(0)
+        
+        # Convert to base64
+        img_str = base64.b64encode(buffer.getvalue()).decode()
+        return f"data:image/png;base64,{img_str}"
+    
+    except Exception as e:
+        logger.error(f"Error in get_wordcloud_for_topic: {str(e)}")
+        return None
+
+
+def create_prediction_simulator(models: Dict[str, Any], sample_text: str) -> Dict[str, Any]:
+    """
+    Create a prediction simulator configuration.
+    
+    Args:
+        models (Dict[str, Any]): Dictionary of loaded models.
+        sample_text (str): Sample text to use for initial display.
+        
+    Returns:
+        Dict[str, Any]: Dictionary with simulator configuration.
+    """
+    simulator = {
+        'has_models': len(models) > 0,
+        'initial_text': sample_text,
+        'available_models': {
+            'sentiment': 'sentiment' in models,
+            'topics': 'topic' in models,
+            'features': 'feature_extractor' in models
+        }
+    }
+    
+    # Add prediction functions
+    if 'sentiment' in models:
+        simulator['predict_sentiment'] = lambda text: models['sentiment'].analyze(text)
+    else:
+        simulator['predict_sentiment'] = lambda text: None
+    
+    if 'topic' in models:
+        simulator['predict_topics'] = lambda text: models['topic'].extract_topics([text])
+    else:
+        simulator['predict_topics'] = lambda text: None
+    
+    if 'feature_extractor' in models:
+        simulator['extract_features'] = lambda text: models['feature_extractor'].extract_features(text)
+    else:
+        simulator['extract_features'] = lambda text: None
+    
+    return simulator
+
+
+def create_topic_explorer(topic_model: Optional[TopicModeler]) -> Dict[str, Any]:
+    """
+    Create a topic explorer configuration.
+    
+    Args:
+        topic_model (Optional[TopicModeler]): The topic model or None.
+        
+    Returns:
+        Dict[str, Any]: Dictionary with explorer configuration.
+    """
+    if topic_model is None:
+        return {'has_model': False}
+    
+    explorer = {
+        'has_model': True,
+        'num_topics': topic_model.num_topics if hasattr(topic_model, 'num_topics') else 0,
+        'topics_df': format_topics(topic_model),
+        'visualization_html': extract_topic_visualization(topic_model),
+        'get_topic_words': lambda topic_id, n=10: topic_model.get_topic_words(topic_id, n) if hasattr(topic_model, 'get_topic_words') else [],
+        'get_wordcloud': lambda topic_id: get_wordcloud_for_topic(topic_model, topic_id)
+    }
+    
+    return explorer

@@ -129,21 +129,6 @@ python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
 python -c "import spacy; spacy.cli.download('en_core_web_sm')"
 ```
 
-### Using Pip
-
-```bash
-# Create a virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Download additional resources
-python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
-python -c "import spacy; spacy.cli.download('en_core_web_sm')"
-```
-
 ## Running the Application
 
 ### Data Pipeline

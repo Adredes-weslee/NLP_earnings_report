@@ -1,5 +1,7 @@
-# streamlit_app.py
-# Streamlit application for interactive visualization and analysis
+"""
+Streamlit application for interactive visualization and analysis of earnings reports.
+Uses NLP techniques to analyze earnings announcement texts and predict market reactions.
+"""
 
 import streamlit as st
 import pandas as pd
@@ -8,18 +10,23 @@ import matplotlib.pyplot as plt
 import os
 import sys
 import pickle
-from sklearn.decomposition import LatentDirichletAllocation as LDA
+import joblib
+import logging
+from PIL import Image
+from datetime import datetime
 
 # Add the parent directory to the path so we can import our modules
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Import modules
-from config import (OUTPUT_DIR, MODEL_DIR, LARGE_RETURN_THRESHOLD)
-from data_processor import load_data, process_data
-from feature_extractor import create_document_term_matrix, fit_lda_model, get_top_words
-from model_trainer import train_lasso_model, train_classifiers
-from utils import (plot_topic_words, plot_lasso_coefficients, plot_confusion_matrices,
-                plot_roc_curves, generate_summary_report)
+# Import configuration
+from config import (OUTPUT_DIR, MODEL_DIR, LARGE_RETURN_THRESHOLD, 
+                   EMBEDDING_MODEL_PATH, SENTIMENT_MODEL_PATH, 
+                   TOPIC_MODEL_PATH, FEATURE_EXTRACTOR_PATH)
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('streamlit_app')
 
 # Set page config
 st.set_page_config(
@@ -28,294 +35,421 @@ st.set_page_config(
     layout="wide"
 )
 
-# Create directories if they don't exist
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(MODEL_DIR, exist_ok=True)
-
-# Title and description
-st.title("Earnings Announcements Text Analysis")
-st.markdown("""
-This application analyzes the text of earnings announcements using Natural Language Processing 
-and Machine Learning techniques to identify topics and predict stock returns.
-""")
-
-# Sidebar
-st.sidebar.header("Analysis Parameters")
-
-# Main layout
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Data Processing", 
-    "Topic Modeling", 
-    "Lasso Regression", 
-    "Classification", 
-    "Report"
-])
-
-# Data Processing Tab
-with tab1:
-    st.header("Data Processing")
+# Check if models exist, if not, create placeholders
+def check_models_exist():
+    """Check if required models exist, if not create placeholders"""
+    from create_placeholder_models import create_placeholder_models
     
-    data_source = st.radio(
-        "Select data source:",
-        ("Upload file", "Use sample data", "Load processed data")
+    # Check for key model files
+    if not os.path.exists(os.path.join(EMBEDDING_MODEL_PATH, 'vectorizer.joblib')):
+        with st.spinner("Setting up placeholder models for demonstration..."):
+            create_placeholder_models()
+        st.success("Placeholder models created for demonstration")
+        
+    return True
+
+# Load models
+@st.cache_resource
+def load_models():
+    """Load the trained models"""
+    models = {}
+    
+    try:
+        # Load TF-IDF vectorizer
+        models['vectorizer'] = joblib.load(os.path.join(EMBEDDING_MODEL_PATH, 'vectorizer.joblib'))
+        models['embedding_config'] = joblib.load(os.path.join(EMBEDDING_MODEL_PATH, 'config.joblib'))
+        
+        # Load sentiment analyzer config
+        models['sentiment_config'] = joblib.load(os.path.join(SENTIMENT_MODEL_PATH, 'sentiment_config.joblib'))
+        
+        # Load topic model
+        topic_model_path = os.path.join(TOPIC_MODEL_PATH, 'lda_model.pkl')
+        if os.path.exists(topic_model_path):
+            with open(topic_model_path, 'rb') as f:
+                models['topic_model'] = pickle.load(f)
+        
+        # Load feature extractor
+        feature_path = os.path.join(FEATURE_EXTRACTOR_PATH, 'feature_extractor.pkl')
+        if os.path.exists(feature_path):
+            with open(feature_path, 'rb') as f:
+                models['feature_extractor'] = pickle.load(f)
+    
+    except Exception as e:
+        st.error(f"Error loading models: {e}")
+        
+    return models
+
+# Analyze sample text
+def analyze_text(text, models):
+    """Analyze a sample text using loaded models"""
+    results = {}
+    
+    # TF-IDF embedding
+    if 'vectorizer' in models:
+        vector = models['vectorizer'].transform([text])
+        results['vector_shape'] = vector.shape
+        
+        # Get top TF-IDF terms
+        feature_names = models['vectorizer'].get_feature_names_out()
+        scores = zip(feature_names, vector.toarray()[0])
+        sorted_scores = sorted(scores, key=lambda x: x[1], reverse=True)
+        results['top_terms'] = sorted_scores[:20]
+    
+    # Sentiment analysis
+    if 'sentiment_config' in models:
+        # Simple word-based sentiment calculation
+        positive_words = models['sentiment_config'].get('positive_words', [])
+        negative_words = models['sentiment_config'].get('negative_words', [])
+        uncertainty_words = models['sentiment_config'].get('uncertainty_words', [])
+        litigious_words = models['sentiment_config'].get('litigious_words', [])
+        
+        # Count occurrences
+        text_lower = text.lower()
+        words = text_lower.split()
+        total_words = len(words)
+        
+        if total_words > 0:
+            pos_count = sum(1 for w in words if w in positive_words)
+            neg_count = sum(1 for w in words if w in negative_words)
+            unc_count = sum(1 for w in words if w in uncertainty_words)
+            lit_count = sum(1 for w in words if w in litigious_words)
+            
+            results['sentiment'] = {
+                'positive': pos_count / total_words if total_words > 0 else 0,
+                'negative': neg_count / total_words if total_words > 0 else 0,
+                'uncertainty': unc_count / total_words if total_words > 0 else 0,
+                'litigious': lit_count / total_words if total_words > 0 else 0,
+                'net_sentiment': (pos_count - neg_count) / total_words if total_words > 0 else 0
+            }
+    
+    # Topic modeling
+    if 'topic_model' in models and 'vectorizer' in models:
+        # Get topics from model
+        topic_data = models['topic_model'].get('topics', {})
+        results['topics'] = {
+            'num_topics': models['topic_model'].get('num_topics', 0),
+            'top_topics': list(topic_data.items())[:5]  # Get first 5 topics
+        }
+    
+    return results
+
+# Load processed data 
+@st.cache_data
+def load_processed_data():
+    """Load the processed earnings report data"""
+    try:
+        # Try to load from the data versioner's latest version
+        df = pd.read_csv("data/processed/train_edad7fda80.csv")
+        return df
+    except Exception as e:
+        st.warning(f"Could not load processed data: {e}")
+        # Provide sample data structure
+        return pd.DataFrame({
+            'File_Name': ['sample1.txt', 'sample2.txt'],
+            'ea_text': [
+                'The company reported strong revenue growth of 15% year over year.',
+                'Due to challenging market conditions, we experienced a decrease in quarterly earnings.'
+            ],
+            'datacqtr': ['2024Q1', '2024Q1'],
+            'BHAR0_2': [0.025, -0.018],
+            'label': [0, 0]
+        })
+
+# Main function
+def main():
+    # Title and description
+    st.title("Earnings Announcements Text Analysis")
+    st.markdown("""
+    This application analyzes the text of earnings announcements using Natural Language Processing 
+    and Machine Learning techniques to identify topics, analyze sentiment, and predict stock returns.
+    """)
+    
+    # Check if models exist, if not create placeholders
+    check_models_exist()
+    
+    # Load models
+    models = load_models()
+    
+    # Sidebar
+    st.sidebar.header("Navigation")
+    page = st.sidebar.radio(
+        "Select a page:", 
+        ["Dashboard", "Text Analysis", "Topic Explorer", "Model Zoo", "Prediction Simulator"]
     )
     
-    if data_source == "Upload file":
-        uploaded_file = st.file_uploader("Upload earnings announcement data (CSV/GZ format):", type=['csv', 'gz'])
-        if uploaded_file is not None:
-            try:
-                df = pd.read_csv(uploaded_file)
-                st.success(f"File loaded successfully with {df.shape[0]} rows and {df.shape[1]} columns.")
-                st.write(df.head())
-            except Exception as e:
-                st.error(f"Error loading file: {e}")
-    
-    elif data_source == "Use sample data":
-        if st.button("Load sample data"):
-            try:
-                df = load_data()
-                st.success(f"Sample data loaded with {df.shape[0]} rows.")
-                st.write(df.head())
-            except Exception as e:
-                st.error(f"Error loading sample data: {e}")
-    
-    elif data_source == "Load processed data":
-        if st.button("Load processed data"):
-            try:
-                df = pd.read_csv("./task2_data_clean.csv.gz")
-                st.success(f"Processed data loaded with {df.shape[0]} rows.")
-                st.write(df.head())
-            except Exception as e:
-                st.error(f"Error loading processed data: {e}. Make sure the file exists.")
-    
-    # Data processing options
-    if 'df' in locals():
-        st.subheader("Text Cleaning")
-        if st.button("Process text data"):
-            with st.spinner("Cleaning and processing text data..."):
-                processed_df = process_data(df)
-                st.success("Text processing complete!")
-                st.write(processed_df[['clean_sent']].head())
-                
-                # Save processed data
-                save_path = os.path.join(OUTPUT_DIR, "processed_data.csv.gz")
-                processed_df.to_csv(save_path, compression='gzip', index=False)
-                st.success(f"Processed data saved to {save_path}")
-
-# Topic Modeling Tab
-with tab2:
-    st.header("Topic Modeling")
-    
-    # Topic modeling parameters
-    st.subheader("Topic Modeling Parameters")
-    
-    n_topics = st.slider("Number of topics", 5, 100, 40, 5)
-    
-    # Try to load data
-    data_loaded = False
-    try:
-        if os.path.exists("./task2_data_clean.csv.gz"):
-            df = pd.read_csv("./task2_data_clean.csv.gz")
-            data_loaded = True
-    except:
-        st.warning("Processed data not found. Please process data in the Data Processing tab first.")
-    
-    if data_loaded:
-        if st.button("Run Topic Modeling"):
-            with st.spinner("Creating document-term matrix..."):
-                dtm, vec, vocab = create_document_term_matrix(df['clean_sent'])
-                
-                st.success(f"Document-term matrix created with shape {dtm.shape}")
-                
-            with st.spinner(f"Fitting LDA model with {n_topics} topics..."):
-                lda_model, topics = fit_lda_model(dtm, n_topics=n_topics)
-                topics_words = get_top_words(lda_model, vocab, n_words=10)
-                
-                st.success("Topic modeling complete!")
-                
-                # Save results
-                np.save(os.path.join(OUTPUT_DIR, 'topic_distributions.npy'), topics)
-                
-                # Display top words for each topic
-                st.subheader("Top Words by Topic")
-                cols = 3
-                rows = (min(20, n_topics) + cols - 1) // cols
-                
-                for i in range(0, min(20, n_topics), cols):
-                    topic_cols = st.columns(cols)
-                    for j in range(cols):
-                        if i + j < min(20, n_topics):
-                            with topic_cols[j]:
-                                st.markdown(f"**Topic {i+j}**")
-                                st.write(", ".join(topics_words[i+j]))
-                
-                # Visualize topics
-                st.subheader("Topic Visualization")
-                fig = plot_topic_words(lda_model, vocab, topics_to_show=range(min(12, n_topics)))
-                st.pyplot(fig)
-
-# Lasso Regression Tab
-with tab3:
-    st.header("Lasso Regression Analysis")
-    
-    st.info("Lasso regression is used to identify topics that are most predictive of stock returns.")
-    
-    # Check if required files exist
-    topics_file = os.path.join(OUTPUT_DIR, 'topic_distributions.npy')
-    
-    if os.path.exists(topics_file) and data_loaded:
-        topics = np.load(topics_file)
+    # Dashboard Page
+    if page == "Dashboard":
+        st.header("NLP Earnings Report Dashboard")
         
-        st.subheader("Lasso Parameters")
-        alpha_min = st.number_input("Minimum alpha value", 0.00001, 0.1, 0.00001, format="%.5f")
-        alpha_max = st.number_input("Maximum alpha value", 0.00001, 0.1, 0.02, format="%.5f")
+        # Display feature importance plot if available
+        fig_path = os.path.join(OUTPUT_DIR, 'figures', 'feature_importances.png')
+        if os.path.exists(fig_path):
+            st.subheader("Feature Importance")
+            image = Image.open(fig_path)
+            st.image(image, caption="Feature importance for return prediction")
         
-        if st.button("Run Lasso Regression"):
-            with st.spinner("Training Lasso model..."):
-                lasso_model, lasso_results, nonzero_topics = train_lasso_model(
-                    topics, df['BHAR0_2'], alpha_range=(alpha_min, alpha_max)
-                )
-                
-                st.success("Lasso regression complete!")
-                
-                # Display results
-                st.subheader("Lasso Results")
-                st.write(f"Best alpha: {lasso_results['best_alpha']:.6f}")
-                st.write(f"Number of topics with non-zero coefficients: {lasso_results['nonzero_topics']}")
-                
-                # Show most influential topics
-                st.subheader("Most Influential Topics")
-                st.write(f"Topic with most positive coefficient: Topic {lasso_results['most_positive_topic']} " +
-                        f"(Coefficient: {lasso_results['most_positive_coef']:.4f})")
-                st.write(f"Topic with most negative coefficient: Topic {lasso_results['most_negative_topic']} " +
-                        f"(Coefficient: {lasso_results['most_negative_coef']:.4f})")
-                
-                # Plot coefficients
-                st.subheader("Lasso Coefficients Visualization")
-                fig = plot_lasso_coefficients(lasso_model.coef_, top_n=10)
-                st.pyplot(fig)
-    else:
-        st.warning("Topic distributions not found. Please run topic modeling in the Topic Modeling tab first.")
-
-# Classification Tab
-with tab4:
-    st.header("Classification Analysis")
-    
-    st.info(f"Classification is used to predict large positive returns (>{LARGE_RETURN_THRESHOLD}%).")
-    
-    # Check if required files exist
-    topics_file = os.path.join(OUTPUT_DIR, 'topic_distributions.npy')
-    
-    if os.path.exists(topics_file) and data_loaded:
-        topics = np.load(topics_file)
+        # Display dataset statistics
+        st.subheader("Dataset Overview")
+        df = load_processed_data()
         
-        st.subheader("Classification Models")
-        models_to_train = st.multiselect(
-            "Select models to train:",
-            ["LogisticRegression", "SVM", "RandomForest", "GradientBoosting"],
-            ["LogisticRegression", "RandomForest"]
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Number of Reports", f"{len(df)}")
+        with col2:
+            avg_return = df['BHAR0_2'].mean() * 100 if 'BHAR0_2' in df.columns else 0
+            st.metric("Average Return", f"{avg_return:.2f}%")
+        with col3:
+            positive_pct = (df['BHAR0_2'] > 0).mean() * 100 if 'BHAR0_2' in df.columns else 50
+            st.metric("Positive Returns", f"{positive_pct:.1f}%")
+        
+        # Display sample data
+        st.subheader("Sample Data")
+        st.write(df.head())
+        
+    # Text Analysis Page
+    elif page == "Text Analysis":
+        st.header("Text Analysis Tool")
+        
+        # Text input area
+        sample_text = st.text_area(
+            "Enter earnings report text to analyze:", 
+            "The company reported strong quarterly results with revenue increasing by 15% year-over-year to $1.2 billion. " +
+            "Net income was $240 million, up 12% from the previous year. " +
+            "Despite market headwinds, we maintained strong operating margins of 22%.",
+            height=200
         )
         
-        n_iter = st.slider("Number of hyperparameter combinations to try", 10, 200, 50)
-        
-        if st.button("Train Classification Models"):
-            if not models_to_train:
-                st.warning("Please select at least one model to train.")
-            else:
-                with st.spinner("Training classification models..."):
-                    best_model, classifier_results = train_classifiers(
-                        topics, df['BHAR0_2'], n_iter_search=n_iter
-                    )
+        # Analyze button
+        if st.button("Analyze Text"):
+            with st.spinner("Analyzing text..."):
+                results = analyze_text(sample_text, models)
+                
+                # Display results
+                st.subheader("Analysis Results")
+                
+                # Display sentiment analysis
+                if 'sentiment' in results:
+                    st.write("### Sentiment Analysis")
+                    sentiment = results['sentiment']
                     
-                    st.success("Classification model training complete!")
+                    sentiment_cols = st.columns(5)
+                    with sentiment_cols[0]:
+                        st.metric("Positive", f"{sentiment['positive']:.4f}")
+                    with sentiment_cols[1]:
+                        st.metric("Negative", f"{sentiment['negative']:.4f}")
+                    with sentiment_cols[2]:
+                        st.metric("Uncertainty", f"{sentiment['uncertainty']:.4f}")
+                    with sentiment_cols[3]:
+                        st.metric("Litigious", f"{sentiment['litigious']:.4f}")
+                    with sentiment_cols[4]:
+                        net_sentiment = sentiment['net_sentiment']
+                        st.metric("Net Sentiment", f"{net_sentiment:.4f}", 
+                                 delta="+positive" if net_sentiment > 0 else "-negative")
+                
+                # Display top terms
+                if 'top_terms' in results:
+                    st.write("### Top TF-IDF Terms")
+                    top_terms_df = pd.DataFrame(results['top_terms'], columns=['Term', 'TF-IDF Score'])
+                    st.write(top_terms_df)
                     
-                    # Display results
-                    st.subheader("Classification Results")
-                    best_model_name = max(classifier_results, key=lambda x: classifier_results[x]['test_f1_macro'])
+                    # Visualize top terms
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    terms = [term for term, _ in results['top_terms'][:10]]
+                    scores = [score for _, score in results['top_terms'][:10]]
+                    ax.barh(range(len(terms)), scores, align='center')
+                    ax.set_yticks(range(len(terms)))
+                    ax.set_yticklabels(terms)
+                    ax.invert_yaxis()
+                    ax.set_xlabel('TF-IDF Score')
+                    ax.set_title('Top 10 TF-IDF Terms')
+                    st.pyplot(fig)
+                
+                # Display topics
+                if 'topics' in results:
+                    st.write("### Topic Analysis")
+                    st.write(f"Number of topics: {results['topics']['num_topics']}")
                     
-                    st.write(f"Best model: {best_model_name}")
-                    st.write(f"Macro F1 score: {classifier_results[best_model_name]['test_f1_macro']:.4f}")
-                    
-                    # Show results for all models
-                    results_df = pd.DataFrame({
-                        'Model': list(classifier_results.keys()),
-                        'Macro F1 Score': [results['test_f1_macro'] for results in classifier_results.values()]
-                    })
-                    results_df = results_df.sort_values('Macro F1 Score', ascending=False)
-                    
-                    st.write(results_df)
-                    
-                    # Show detailed results for best model
-                    st.subheader(f"Detailed Results for {best_model_name}")
-                    
-                    # Classification report
-                    report = classifier_results[best_model_name]['classification_report']
-                    report_df = pd.DataFrame({
-                        'Class': list(report.keys())[:2],
-                        'Precision': [report[cls]['precision'] for cls in list(report.keys())[:2]],
-                        'Recall': [report[cls]['recall'] for cls in list(report.keys())[:2]],
-                        'F1-Score': [report[cls]['f1-score'] for cls in list(report.keys())[:2]],
-                        'Support': [report[cls]['support'] for cls in list(report.keys())[:2]]
-                    })
-                    st.write(report_df)
-    else:
-        st.warning("Topic distributions not found. Please run topic modeling in the Topic Modeling tab first.")
-
-# Report Tab
-with tab5:
-    st.header("Analysis Report")
+                    for topic_id, terms in results['topics']['top_topics']:
+                        st.write(f"**Topic {topic_id}:** " + ", ".join([term for term, _ in terms[:5]]))
     
-    if os.path.exists(os.path.join(MODEL_DIR, 'lda_model.pkl')) and \
-       os.path.exists(os.path.join(MODEL_DIR, 'lasso_model.pkl')) and \
-       os.path.exists(os.path.join(OUTPUT_DIR, 'classifier_results.pkl')):
+    # Topic Explorer Page 
+    elif page == "Topic Explorer":
+        st.header("Topic Explorer")
         
-        if st.button("Generate Report"):
-            with st.spinner("Generating comprehensive report..."):
-                # Load models and results
-                with open(os.path.join(MODEL_DIR, 'lda_model.pkl'), 'rb') as f:
-                    lda_model = pickle.load(f)
+        if 'topic_model' in models:
+            topics = models['topic_model'].get('topics', {})
+            
+            # Topic selection
+            topic_options = list(range(models['topic_model'].get('num_topics', 0)))
+            selected_topic = st.selectbox("Select a topic to explore:", topic_options)
+            
+            if selected_topic in topics:
+                # Display topic terms
+                st.subheader(f"Top Words for Topic {selected_topic}")
+                terms = topics[selected_topic]
                 
-                with open(os.path.join(MODEL_DIR, 'lasso_model.pkl'), 'rb') as f:
-                    lasso_model = pickle.load(f)
+                # Create table
+                terms_df = pd.DataFrame(terms, columns=['Term', 'Weight'])
+                st.write(terms_df)
                 
-                with open(os.path.join(OUTPUT_DIR, 'classifier_results.pkl'), 'rb') as f:
-                    classifier_results = pickle.load(f)
+                # Create word cloud (simplified representation)
+                st.subheader("Topic Word Cloud")
+                fig, ax = plt.subplots(figsize=(10, 6))
+                terms_list = [term for term, _ in terms][:20]
+                weights = [weight for _, weight in terms][:20]
+                ax.bar(terms_list, weights)
+                plt.xticks(rotation=45, ha='right')
+                plt.tight_layout()
+                st.pyplot(fig)
                 
-                topics = np.load(os.path.join(OUTPUT_DIR, 'topic_distributions.npy'))
+                # Show related documents
+                st.subheader("Sample Documents with High Topic Weight")
+                st.info("In a full implementation, this would show actual documents from the dataset with high weights for this topic.")
+        else:
+            st.warning("Topic model not found. Please run the advanced NLP pipeline first.")
+    
+    # Model Zoo Page
+    elif page == "Model Zoo":
+        st.header("Model Zoo")
+        
+        st.write("""
+        This page provides access to pre-trained models for analyzing earnings reports.
+        Select a model to see details and usage instructions.
+        """)
+        
+        # Model selection
+        model_type = st.radio(
+            "Select model type:",
+            ["Embedding Models", "Sentiment Models", "Topic Models", "Prediction Models"]
+        )
+        
+        if model_type == "Embedding Models":
+            st.subheader("Available Embedding Models")
+            
+            if 'embedding_config' in models:
+                st.write("### TF-IDF Vectorizer")
+                st.write(f"Method: {models['embedding_config'].get('method', 'tfidf')}")
+                st.write(f"Max features: {models['embedding_config'].get('max_features', 'N/A')}")
+                st.write(f"Vocabulary size: {models['embedding_config'].get('vocab_size', 'N/A')}")
                 
-                # Load vocabulary
-                with open(os.path.join(MODEL_DIR, 'vectorizer.pkl'), 'rb') as f:
-                    vec = pickle.load(f)
-                vocab = vec.get_feature_names_out()
+                st.info("This model converts text into TF-IDF vectors, which measure term importance.")
+            else:
+                st.warning("No embedding models available. Run the advanced NLP pipeline to generate models.")
+        
+        elif model_type == "Sentiment Models":
+            st.subheader("Available Sentiment Models")
+            
+            if 'sentiment_config' in models:
+                st.write("### Loughran-McDonald Sentiment Analyzer")
+                st.write(f"Method: {models['sentiment_config'].get('method', 'loughran_mcdonald')}")
+                st.write("This model analyzes financial text sentiment using the Loughran-McDonald lexicon.")
                 
-                # Get top words for topics
-                topics_words = get_top_words(lda_model, vocab)
+                st.markdown("""
+                **Features:**
+                - Positive sentiment score
+                - Negative sentiment score
+                - Uncertainty score
+                - Litigious score
+                """)
+            else:
+                st.warning("No sentiment models available. Run the advanced NLP pipeline to generate models.")
+        
+        elif model_type == "Topic Models":
+            st.subheader("Available Topic Models")
+            
+            if 'topic_model' in models:
+                st.write("### Latent Dirichlet Allocation (LDA) Model")
+                st.write(f"Number of topics: {models['topic_model'].get('num_topics', 'N/A')}")
+                st.write(f"Coherence score: {models['topic_model'].get('coherence', 'N/A')}")
+                st.write(f"Perplexity: {models['topic_model'].get('perplexity', 'N/A')}")
                 
-                # Lasso results
-                lasso_results = {
-                    'best_alpha': 0.001,  # Placeholder, would be from actual results
-                    'nonzero_topics': np.sum(lasso_model.coef_ != 0),
-                    'most_positive_topic': np.argmax(lasso_model.coef_),
-                    'most_positive_coef': np.max(lasso_model.coef_),
-                    'most_negative_topic': np.argmin(lasso_model.coef_),
-                    'most_negative_coef': np.min(lasso_model.coef_)
-                }
+                st.markdown("""
+                **Features:**
+                - Topic-word distributions
+                - Document-topic distributions
+                - Topic coherence metrics
+                """)
+            else:
+                st.warning("No topic models available. Run the advanced NLP pipeline to generate models.")
+        
+        elif model_type == "Prediction Models":
+            st.subheader("Available Prediction Models")
+            
+            if 'feature_extractor' in models:
+                st.write("### Combined Feature Regression Model")
+                st.write("This model predicts stock returns based on text features.")
                 
-                # LDA results
-                lda_results = {
-                    'n_topics': lda_model.n_components,
-                    'coherence_score': -0.97  # Placeholder, would be from actual results
-                }
+                feature_groups = models['feature_extractor'].get('feature_groups', {})
+                st.write("Feature groups:")
+                for group, features in feature_groups.items():
+                    st.write(f"- **{group}**: {len(features)} features")
                 
-                # Generate report
-                report_text = generate_summary_report(
-                    lda_results, lasso_results, classifier_results, topics_words
-                )
+                st.info("To use this model for predictions, go to the Prediction Simulator page.")
+            else:
+                st.warning("No prediction models available. Run the advanced NLP pipeline to generate models.")
+    
+    # Prediction Simulator Page
+    elif page == "Prediction Simulator":
+        st.header("Return Prediction Simulator")
+        
+        st.write("""
+        This tool simulates predictions of post-earnings announcement returns based on the text.
+        Enter an earnings announcement text to get a predicted return.
+        """)
+        
+        # Text input
+        prediction_text = st.text_area(
+            "Enter earnings announcement text:",
+            "We are pleased to report a strong quarter with revenue of $2.5 billion, an increase of 18% " +
+            "compared to the same period last year. Operating income was $620 million, representing a " +
+            "margin of 24.8%. Net income for the quarter was $450 million, or $2.15 per diluted share.",
+            height=200
+        )
+        
+        # Simulate prediction
+        if st.button("Predict Return"):
+            with st.spinner("Analyzing text and predicting return..."):
+                # Analyze text
+                results = analyze_text(prediction_text, models)
                 
-                st.success("Report generated successfully!")
-                st.markdown(report_text)
-    else:
-        st.warning("Some required models or results files are missing. Please complete the previous analysis steps first.")
+                # Simulate prediction based on sentiment
+                if 'sentiment' in results:
+                    sentiment = results['sentiment']
+                    net_sentiment = sentiment['net_sentiment']
+                    
+                    # Simple prediction model based on sentiment
+                    predicted_return = net_sentiment * 10  # Simple multiplier for demo
+                    confidence = abs(net_sentiment) * 2  # Simple confidence calculation
+                    
+                    # Display prediction
+                    st.subheader("Prediction Results")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric(
+                            "Predicted Return", 
+                            f"{predicted_return:.2f}%",
+                            delta="positive" if predicted_return > 0 else "negative"
+                        )
+                    with col2:
+                        st.metric("Confidence", f"{min(confidence * 100, 100):.1f}%")
+                    
+                    # Display explanation
+                    st.subheader("Prediction Explanation")
+                    
+                    if predicted_return > 3:
+                        st.write("**Strong Positive Prediction**: The announcement contains very positive language and likely indicates better-than-expected results.")
+                    elif predicted_return > 1:
+                        st.write("**Positive Prediction**: The announcement contains positive language that suggests good results.")
+                    elif predicted_return > -1:
+                        st.write("**Neutral Prediction**: The announcement is relatively neutral, suggesting results in line with expectations.")
+                    elif predicted_return > -3:
+                        st.write("**Negative Prediction**: The announcement contains negative language that suggests disappointing results.")
+                    else:
+                        st.write("**Strong Negative Prediction**: The announcement contains very negative language and likely indicates worse-than-expected results.")
+                    
+                    # Add disclaimer
+                    st.info("**Disclaimer**: This is a simulated prediction for demonstration purposes only. It should not be used for actual investment decisions.")
 
-# Run the app with the following command:
-# streamlit run streamlit_app.py
+if __name__ == "__main__":
+    main()

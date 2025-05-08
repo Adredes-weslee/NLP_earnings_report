@@ -380,6 +380,150 @@ class FeatureExtractor:
         
         return features
     
+    def extract_features(self, df: pd.DataFrame, text_column: str, 
+                        include_embeddings: bool = True,
+                        include_topics: bool = True,
+                        include_sentiment: bool = True) -> Tuple[np.ndarray, List[str]]:
+        """
+        Extract features from a dataframe with text data.
+        
+        Args:
+            df: DataFrame containing text data
+            text_column: Name of column containing text
+            include_embeddings: Whether to include embedding features
+            include_topics: Whether to include topic features
+            include_sentiment: Whether to include sentiment features
+            
+        Returns:
+            Tuple of (feature_matrix, feature_names)
+        """
+        logger.info(f"Extracting features from {len(df)} texts")
+        features_list = []
+        feature_names = []
+        
+        # Extract base features using the per-text method
+        base_features_df = pd.DataFrame([self.extract_text_features(text) for text in df[text_column].fillna('')])
+        if not base_features_df.empty:
+            features_list.append(base_features_df)
+            feature_names.extend(base_features_df.columns.tolist())
+        
+        # Add sentiment features if requested
+        if include_sentiment and hasattr(self, 'sentiment_analyzer'):
+            logger.info("Adding sentiment features")
+            try:
+                sentiment_df = self.sentiment_analyzer.batch_analyze(df[text_column].fillna('').tolist())
+                if not sentiment_df.empty:
+                    # Add prefix to avoid name collisions
+                    sentiment_df = sentiment_df.add_prefix('sentiment_')
+                    features_list.append(sentiment_df)
+                    feature_names.extend(sentiment_df.columns.tolist())
+            except Exception as e:
+                logger.error(f"Error extracting sentiment features: {str(e)}")
+        
+        # Add topic features if requested
+        if include_topics and hasattr(self, 'topic_modeler') and hasattr(self, 'embedding_processor'):
+            logger.info("Adding topic features")
+            try:
+                # Get document-term matrix
+                texts = df[text_column].fillna('').tolist()
+                if hasattr(self.embedding_processor, 'vectorizer'):
+                    dtm = self.embedding_processor.vectorizer.transform(texts)
+                    
+                    # Get document-topic distributions
+                    doc_topics = self.topic_modeler.get_document_topics(dtm)
+                    
+                    # Create topic feature dataframe
+                    topic_cols = [f"topic_{i}" for i in range(doc_topics.shape[1])]
+                    topic_df = pd.DataFrame(doc_topics, columns=topic_cols)
+                    
+                    features_list.append(topic_df)
+                    feature_names.extend(topic_cols)
+            except Exception as e:
+                logger.error(f"Error extracting topic features: {str(e)}")
+        
+        # Add embedding features if requested
+        if include_embeddings and hasattr(self, 'embedding_processor'):
+            logger.info("Adding embedding features")
+            try:
+                # Use a dimensionality-reduced version or top features only
+                # to avoid having too many features
+                if hasattr(self.embedding_processor, 'vectorizer'):
+                    # For sparse matrices (BOW, TF-IDF), select top features by variance
+                    dtm = self.embedding_processor.vectorizer.transform(df[text_column].fillna('').tolist())
+                    
+                    # Take only up to 100 features to avoid dimensionality issues
+                    max_features = min(100, dtm.shape[1])
+                    
+                    # Get feature names
+                    if hasattr(self.embedding_processor, 'vocab'):
+                        vocab = self.embedding_processor.vocab[:max_features]
+                    else:
+                        vocab = [f"feature_{i}" for i in range(max_features)]
+                    
+                    # Convert to dense and take first max_features columns
+                    embedding_features = dtm.todense()[:, :max_features]
+                    embedding_df = pd.DataFrame(embedding_features, columns=[f"embedding_{v}" for v in vocab])
+                    
+                    features_list.append(embedding_df)
+                    feature_names.extend(embedding_df.columns.tolist())
+            except Exception as e:
+                logger.error(f"Error extracting embedding features: {str(e)}")
+        
+        # Combine all features
+        if not features_list:
+            logger.warning("No features were extracted")
+            return np.array([]), []
+        
+        # Concatenate all feature dataframes
+        all_features = pd.concat(features_list, axis=1)
+        
+        # Convert to numpy array for sklearn compatibility
+        feature_matrix = all_features.values
+        
+        logger.info(f"Extracted {feature_matrix.shape[1]} features")
+        return feature_matrix, all_features.columns.tolist()
+    
+    def extract_text_features(self, text: str) -> Dict[str, Union[float, str]]:
+        """
+        Extract features from a single text.
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            Dictionary of features
+        """
+        if not isinstance(text, str):
+            return {}
+        
+        # Combine all feature extraction methods
+        features = {}
+        
+        # Extract numerical metrics
+        numerical_metrics = self.extract_numerical_metrics(text)
+        features.update(numerical_metrics)
+        
+        # Extract basic sentiment features
+        sentiment_features = self.extract_sentiment_features(text)
+        features.update(sentiment_features)
+        
+        # Extract readability features
+        readability_features = self.extract_readability_features(text)
+        features.update(readability_features)
+        
+        # Extract financial metrics
+        financial_metrics = self.extract_financial_metrics(text)
+        features.update(financial_metrics)
+        
+        # Extract named entities (add top entities only to avoid too many features)
+        entities = self.extract_named_entities(text)
+        for entity_type, entity_list in entities.items():
+            if entity_list:
+                # Add only first entity of each type
+                features[f"entity_{entity_type}"] = entity_list[0]
+        
+        return features
+        
     def fit(self, texts: List[str], targets=None) -> 'FeatureExtractor':
         """
         Fit the feature extractor (extract feature importance if targets provided).
@@ -503,6 +647,28 @@ class FeatureExtractor:
         """
         self.embedding_processor = embedding_processor
         logger.info(f"Embedding processor set to {type(embedding_processor).__name__}")
+        return self
+
+    def set_sentiment_analyzer(self, sentiment_analyzer):
+        """
+        Set the sentiment analyzer to use for sentiment-based features.
+        
+        Args:
+            sentiment_analyzer: SentimentAnalyzer instance to use
+        """
+        self.sentiment_analyzer = sentiment_analyzer
+        logger.info(f"Sentiment analyzer set to {type(sentiment_analyzer).__name__}")
+        return self
+    
+    def set_topic_modeler(self, topic_modeler):
+        """
+        Set the topic modeler to use for topic-based features.
+        
+        Args:
+            topic_modeler: TopicModeler instance to use
+        """
+        self.topic_modeler = topic_modeler
+        logger.info(f"Topic modeler set to {type(topic_modeler).__name__}")
         return self
 
     def save(self, path: str) -> None:

@@ -1,0 +1,32 @@
+name: earnings-nlp
+channels:
+  - defaults
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.11.0
+  - numpy
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - nltk
+  - scipy
+  - joblib
+  - gensim
+  - streamlit
+  - plotly
+  - wordcloud
+  - spacy
+  - transformers
+  - altair
+  - watchdog
+  - wordcloud
+  - spacy
+  - pip
+  - pip:
+    - tmtoolkit
+    - sentence-transformers
+    - bertopic
+    - umap-learn
+    - hdbscan
+    

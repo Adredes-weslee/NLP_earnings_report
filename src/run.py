@@ -51,21 +51,21 @@ if __name__ == "__main__":
         )
         
     elif args.mode == "data":
-        from data_processor import load_data, process_data
+        from src.data.data_processor import load_data, process_data
         df = load_data(args.data_path)
         processed_df = process_data(df, save_path="./task2_data_clean.csv.gz")
         print(f"Data processing complete. Shape: {processed_df.shape}")
         
     elif args.mode == "topic":
-        from data_processor import load_data
-        from feature_extractor import create_document_term_matrix, tune_lda_topics, plot_topic_coherence, fit_lda_model, get_top_words
+        from src.data.data_processor import load_data
+        from src.models.feature_extractor import create_document_term_matrix, tune_lda_topics, plot_topic_coherence, fit_lda_model, get_top_words
         try:
             df = pd.read_csv("./task2_data_clean.csv.gz")
             print("Using pre-processed data.")
         except:
             print("Pre-processed data not found. Processing raw data...")
             df = load_data(args.data_path)
-            from data_processor import process_data
+            from src.data.data_processor import process_data
             df = process_data(df, save_path="./task2_data_clean.csv.gz")
             
         dtm, vec, vocab = create_document_term_matrix(df['clean_sent'])

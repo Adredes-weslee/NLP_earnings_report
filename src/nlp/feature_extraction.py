@@ -494,6 +494,17 @@ class FeatureExtractor:
         
         return fig
     
+    def set_embedding_processor(self, embedding_processor):
+        """
+        Set the embedding processor to use for embedding-based features.
+        
+        Args:
+            embedding_processor: EmbeddingProcessor instance to use
+        """
+        self.embedding_processor = embedding_processor
+        logger.info(f"Embedding processor set to {type(embedding_processor).__name__}")
+        return self
+
     def save(self, path: str) -> None:
         """
         Save the feature extractor.

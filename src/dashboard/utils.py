@@ -15,6 +15,10 @@ from typing import Dict, List, Any, Tuple, Optional
 from datetime import datetime
 from wordcloud import WordCloud
 
+# Prevent Streamlit file watcher from examining PyTorch internals
+# This fixes the "__path__._path" error with torch.classes
+os.environ["STREAMLIT_WATCH_MODULE_PATHS_EXCLUDE"] = "torch,torchaudio,torchvision"
+
 logger = logging.getLogger('dashboard.utils')
 
 # Add the parent directory to Python path for imports

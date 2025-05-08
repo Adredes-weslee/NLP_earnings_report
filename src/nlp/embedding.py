@@ -6,15 +6,13 @@ Handles text embeddings using various models including transformers.
 import numpy as np
 import pandas as pd
 import logging
+import os
+import joblib
 from typing import List, Dict, Union, Optional, Tuple
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-import joblib
-import os
 
 # Optional imports for more advanced embedding techniques
 try:
-    import torch
-    import transformers
     from transformers import AutoModel, AutoTokenizer
     from sentence_transformers import SentenceTransformer
     TRANSFORMERS_AVAILABLE = True

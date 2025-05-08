@@ -339,47 +339,6 @@ class FeatureExtractor:
         
         return metrics
     
-    def extract_features(self, text: str) -> Dict[str, Union[float, str]]:
-        """
-        Extract all features from text.
-        
-        Args:
-            text: Input text
-            
-        Returns:
-            Dictionary of all extracted features
-        """
-        if not isinstance(text, str):
-            return {}
-        
-        # Combine all feature extraction methods
-        features = {}
-        
-        # Extract numerical metrics
-        numerical_metrics = self.extract_numerical_metrics(text)
-        features.update(numerical_metrics)
-        
-        # Extract sentiment features
-        sentiment_features = self.extract_sentiment_features(text)
-        features.update(sentiment_features)
-        
-        # Extract readability features
-        readability_features = self.extract_readability_features(text)
-        features.update(readability_features)
-        
-        # Extract financial metrics
-        financial_metrics = self.extract_financial_metrics(text)
-        features.update(financial_metrics)
-        
-        # Extract named entities (add top entities only to avoid too many features)
-        entities = self.extract_named_entities(text)
-        for entity_type, entity_list in entities.items():
-            if entity_list:
-                # Add only first entity of each type
-                features[f"entity_{entity_type}"] = entity_list[0]
-        
-        return features
-    
     def extract_features(self, df: pd.DataFrame, text_column: str, 
                         include_embeddings: bool = True,
                         include_topics: bool = True,
@@ -670,6 +629,36 @@ class FeatureExtractor:
         self.topic_modeler = topic_modeler
         logger.info(f"Topic modeler set to {type(topic_modeler).__name__}")
         return self
+
+    def get_feature_groups(self) -> Dict[str, List[str]]:
+        """
+        Get groups of features organized by type.
+        
+        Returns:
+            Dictionary mapping feature group names to lists of feature names
+        """
+        feature_groups = {
+            'sentiment': ['sentiment_polarity', 'sentiment_ratio', 'positive_word_count', 'negative_word_count'],
+            'readability': ['avg_sentence_length', 'avg_syllables_per_word', 'flesch_reading_ease', 
+                        'gunning_fog_index', 'complex_word_pct'],
+            'financial': ['revenue', 'earnings', 'eps', 'growth', 'margin', 'market_share', 'revenue_million', 
+                        'revenue_billion', 'gross_margin', 'operating_margin', 'profit_margin', 
+                        'diluted_eps', 'yoy_growth', 'qoq_growth', 'cash', 'debt', 'guidance'],
+            'entities': [],
+            'topics': []
+        }
+        
+        # Add topic features if available
+        if hasattr(self, 'topic_modeler') and hasattr(self.topic_modeler, 'num_topics'):
+            feature_groups['topics'] = [f'topic_{i}' for i in range(self.topic_modeler.num_topics)]
+        
+        # Add entity features if any were extracted
+        if hasattr(self, 'feature_names'):
+            entity_features = [f for f in self.feature_names if f.startswith('entity_')]
+            if entity_features:
+                feature_groups['entities'] = entity_features
+                
+        return feature_groups
 
     def save(self, path: str) -> None:
         """

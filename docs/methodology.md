@@ -98,6 +98,16 @@ The project provides several visualization methods:
 3. **Interactive Topic Exploration**: Interactive tools for exploring topic relationships
 4. **Sentiment Distribution**: Visual breakdown of sentiment components in texts
 
+## Implementation Details
+
+### Model Storage and Loading
+
+1. **Centralized Configuration**: All model paths are defined in `config.py`
+2. **Standardized Loading Process**: Each model class implements a `load()` class method
+3. **Error Handling**: Graceful degradation when specific models cannot be loaded
+4. **Permission Management**: Directory permissions are handled programmatically
+5. **PyTorch Integration**: Environment variables are used to prevent conflicts between PyTorch and Streamlit
+
 ## References
 
 1. Loughran, T., & McDonald, B. (2011). When is a liability not a liability? Textual analysis, dictionaries, and 10‐Ks. The Journal of Finance, 66(1), 35-65.

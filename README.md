@@ -62,6 +62,7 @@ The project emphasizes reproducibility through proper data versioning, comprehen
    - Detailed methodology documentation
    - Performance metrics and analysis
    - Limitations and future work
+   - Known issues and troubleshooting
 
 ## Execution Workflow
 
@@ -136,7 +137,7 @@ python -c "import spacy; spacy.cli.download('en_core_web_sm')"
 Process the raw data with:
 
 ```bash
-python src/test_data_pipeline.py
+python tests/test_data_pipeline.py
 ```
 
 This will:
@@ -151,7 +152,13 @@ This will:
 Test the NLP components:
 
 ```bash
-python src/test_advanced_nlp.py
+python tests/test_advanced_nlp_quick.py
+```
+
+For full testing:
+
+```bash
+python tests/test_advanced_nlp.py
 ```
 
 This runs:
@@ -165,7 +172,13 @@ This runs:
 Launch the Streamlit dashboard:
 
 ```bash
-streamlit run src/streamlit_app.py
+streamlit run src/dashboard/app.py
+```
+
+For better compatibility with PyTorch, you can use:
+
+```bash
+streamlit run src/dashboard/app.py --server.fileWatcherType none
 ```
 
 The dashboard provides:

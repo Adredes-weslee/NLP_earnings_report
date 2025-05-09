@@ -59,6 +59,11 @@ This document outlines the current limitations of the NLP Earnings Report Analys
    - Interface complexity may be challenging for non-technical financial analysts
    - Limited explanations of model predictions and confidence levels
 
+3. **Technical Issues**
+   - Permission issues with feature extractor directories can prevent proper model loading
+   - PyTorch and Streamlit integration causes file watcher errors requiring environment variable workarounds
+   - Pickle compatibility issues require careful version management between saving and loading models
+
 ## Future Work
 
 ### Data Enhancements

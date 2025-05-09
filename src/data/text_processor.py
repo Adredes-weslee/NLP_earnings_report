@@ -5,9 +5,14 @@ Handles text preprocessing, cleaning, and tokenization with financial domain foc
 
 import re
 import nltk
+import os
+import sys
 from nltk.corpus import stopwords
 from nltk.tokenize import sent_tokenize
 import logging
+
+# Import configuration values
+from ..config import MIN_TOKEN_LENGTH, MIN_SENTENCE_TOKENS, MAX_FINANCIAL_NUM_RATIO
 
 # Set up logging
 logger = logging.getLogger('text_processor')
@@ -48,8 +53,7 @@ class TextProcessor:
         text = re.sub(number_pattern, ' number ', text, flags=re.IGNORECASE)
         
         return text
-    
-    def filter_bad_sentences(self, text, min_words=3, max_words=100):
+    def filter_bad_sentences(self, text, min_words=MIN_SENTENCE_TOKENS, max_words=100):
         """Filter out sentences that are too short, too long, or contain unwanted patterns"""
         if not isinstance(text, str):
             return text

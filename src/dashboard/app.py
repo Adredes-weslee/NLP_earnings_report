@@ -3,6 +3,10 @@ Streamlit dashboard application for NLP earnings report analysis.
 """
 
 import os
+# Prevent Streamlit file watcher from examining PyTorch internals
+# This fixes the "__path__._path" error with torch.classes
+os.environ["STREAMLIT_WATCH_MODULE_PATHS_EXCLUDE"] = "torch,torchaudio,torchvision,pytorch_pretrained_bert,transformers"
+
 import sys
 import streamlit as st
 import pandas as pd
@@ -14,6 +18,7 @@ from typing import Dict, List, Any, Tuple, Optional
 import logging
 import json
 import base64
+import re
 from datetime import datetime
 from io import StringIO
 
@@ -28,30 +33,56 @@ logging.basicConfig(
 )
 logger = logging.getLogger('dashboard')
 
-# Add the parent directory to Python path for imports
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir)
+# Import configuration values
+try:
+    from ..config import (MODEL_DIR, OUTPUT_DIR, FIGURE_DPI, MAX_WORD_CLOUD_WORDS,
+                      EMBEDDING_MODEL_PATH, SENTIMENT_MODEL_PATH, TOPIC_MODEL_PATH)
+except ImportError:
+    # Handle the case when running directly
+    from src.config import (MODEL_DIR, OUTPUT_DIR, FIGURE_DPI, MAX_WORD_CLOUD_WORDS,
+                      EMBEDDING_MODEL_PATH, SENTIMENT_MODEL_PATH, TOPIC_MODEL_PATH)
 
 # Import dashboard utils
-from dashboard.utils import (
-    load_models, 
-    get_available_models,
-    format_topics,
-    classify_sentiment,
-    format_sentiment_result,
-    extract_topic_visualization,
-    get_feature_importance_plot,
-    get_wordcloud_for_topic,
-    create_prediction_simulator,
-    create_topic_explorer
-)
+try:
+    from .dashboard_helpers import (
+        load_models, 
+        get_available_models,
+        format_topics,
+        classify_sentiment,
+        format_sentiment_result,
+        extract_topic_visualization,
+        get_feature_importance_plot,
+        get_wordcloud_for_topic,
+        create_prediction_simulator,
+        create_topic_explorer
+    )
+except ImportError:
+    from src.dashboard.dashboard_helpers import (
+        load_models, 
+        get_available_models,
+        format_topics,
+        classify_sentiment,
+        format_sentiment_result,
+        extract_topic_visualization,
+        get_feature_importance_plot,
+        get_wordcloud_for_topic,
+        create_prediction_simulator,
+        create_topic_explorer
+    )
 
 # Import NLP components
-from nlp.embedding import EmbeddingProcessor
-from nlp.sentiment import SentimentAnalyzer
-from nlp.topic_modeling import TopicModeler
-from nlp.feature_extraction import FeatureExtractor
+try:
+    from ..nlp.embedding import EmbeddingProcessor
+except ImportError:
+    from src.nlp.embedding import EmbeddingProcessor
+try:
+    from ..nlp.sentiment import SentimentAnalyzer
+    from ..nlp.topic_modeling import TopicModeler
+    from ..nlp.feature_extraction import FeatureExtractor
+except ImportError:
+    from src.nlp.sentiment import SentimentAnalyzer
+    from src.nlp.topic_modeling import TopicModeler
+    from src.nlp.feature_extraction import FeatureExtractor
 
 class EarningsReportDashboard:
     """

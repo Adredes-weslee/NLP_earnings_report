@@ -27,9 +27,7 @@ try:
 except LookupError:
     nltk.download('stopwords')
 
-# Import configuration using absolute import to avoid relative import issues
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import (ROOT_DIR, DATA_DIR, RAW_DATA_PATH, PROCESSED_DATA_DIR,
+from ..config import (ROOT_DIR, DATA_DIR, RAW_DATA_PATH, PROCESSED_DATA_DIR,
                    VOCAB_SIZE, LARGE_RETURN_THRESHOLD)
 
 # Print path variables from config

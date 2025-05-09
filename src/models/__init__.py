@@ -11,10 +11,9 @@ from .model_trainer import (
     get_feature_importance
 )
 
-from .feature_extractor import (
-    FeatureExtractorPipeline,
-    combine_features,
-    extract_financial_metrics
+# Update this in src/models/__init__.py
+from ..nlp.feature_extraction import (
+    FeatureExtractor
 )
 
 __all__ = [
@@ -22,7 +21,5 @@ __all__ = [
     'evaluate_model',
     'cross_validate',
     'get_feature_importance',
-    'FeatureExtractorPipeline',
-    'combine_features',
-    'extract_financial_metrics'
+    'FeatureExtractor',
 ]

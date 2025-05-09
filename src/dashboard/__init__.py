@@ -5,7 +5,7 @@ Provides interactive visualization and exploration of earnings report analysis.
 
 # Import dashboard components
 from .app import EarningsReportDashboard, main as run_dashboard
-from .utils import (
+from .dashboard_helpers import (
     load_models,
     get_available_models,
     format_topics,

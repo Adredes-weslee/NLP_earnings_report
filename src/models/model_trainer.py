@@ -15,8 +15,7 @@ import sys
 import pickle
 
 # Import configuration
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from config import (ALPHA_MIN, ALPHA_MAX, N_ALPHAS, TEST_SIZE, CV_FOLDS, RANDOM_STATE,
+from ..config import (ALPHA_MIN, ALPHA_MAX, N_ALPHAS, TEST_SIZE, CV_FOLDS, RANDOM_STATE,
                    LARGE_RETURN_THRESHOLD, N_ITER_SEARCH, OUTPUT_DIR, MODEL_DIR)
 
 def train_model(X, y, model_type='classifier', **kwargs):

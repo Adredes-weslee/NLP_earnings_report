@@ -1,6 +1,6 @@
 """
-Feature extraction module for earnings report text analysis.
-Extracts structured features from unstructured financial text.
+Consolidated feature extraction module for financial text analysis.
+Extracts structured features from unstructured earnings reports.
 """
 
 import numpy as np
@@ -8,16 +8,23 @@ import pandas as pd
 import os
 import re
 import logging
+import pickle
 import joblib
-from typing import List, Dict, Union, Optional, Tuple
-from sklearn.base import BaseEstimator, TransformerMixin
+import sys
+from typing import List, Dict, Union, Optional, Tuple, Any
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.decomposition import TruncatedSVD, LatentDirichletAllocation as LDA
 import matplotlib.pyplot as plt
 import seaborn as sns
-import spacy
+
+# Import configuration values
+from ..config import (MAX_FEATURES, NGRAM_RANGE, MAX_DOC_FREQ, NUM_TOPICS,
+                  TOPIC_WORD_PRIOR, DOC_TOPIC_PRIOR_FACTOR, RANDOM_STATE,
+                  MODEL_DIR, FEATURE_EXTRACTOR_PATH)
 
 # Optional imports for advanced feature extraction
 try:
+    import spacy
     import torch
     from transformers import pipeline
     TRANSFORMERS_AVAILABLE = True
@@ -28,297 +35,110 @@ logger = logging.getLogger('feature_extractor')
 
 class FeatureExtractor:
     """
-    Class for extracting structured features from financial text.
-    Extracts numerical metrics, entities, and other key features from earnings reports.
+    Unified feature extractor for financial text analysis.
+    Combines topic modeling, sentiment analysis, NER, and financial metric extraction.
     """
     
-    def __init__(self, use_spacy: bool = True, use_transformers: bool = False,
-                model_name: str = "en_core_web_sm"):
+    def __init__(self, 
+                 use_topics: bool = True, 
+                 use_sentiment: bool = True, 
+                 use_metrics: bool = True, 
+                 use_embeddings: bool = False,
+                 use_spacy: bool = True, 
+                 use_transformers: bool = False,
+                 model_name: str = "en_core_web_sm"):
         """
         Initialize the feature extractor.
         
         Args:
+            use_topics: Whether to include topic features
+            use_sentiment: Whether to include sentiment features
+            use_metrics: Whether to include extracted financial metrics
+            use_embeddings: Whether to include text embeddings
             use_spacy: Whether to use spaCy for NER
             use_transformers: Whether to use transformers for advanced NER
             model_name: Name of spaCy model or transformer model to use
         """
+        self.use_topics = use_topics
+        self.use_sentiment = use_sentiment
+        self.use_metrics = use_metrics
+        self.use_embeddings = use_embeddings
         self.use_spacy = use_spacy
         self.use_transformers = use_transformers
         self.model_name = model_name
+        
+        # Components that can be set later
+        self.topic_model = None
+        self.sentiment_analyzer = None
+        self.embedding_model = None
+        self.vectorizer = None
+        
+        # NLP-specific attributes
         self.nlp = None
         self.ner_pipeline = None
-        self.feature_importance = {}
         
-        logger.info(f"Initializing FeatureExtractor with use_spacy={use_spacy}, "
-                   f"use_transformers={use_transformers}")
+        # Feature extraction results
+        self.feature_names = None
+        self.feature_importance = None
         
-        # Initialize spaCy if requested
-        if use_spacy:
-            self._load_spacy()
+        logger.info(f"Initialized FeatureExtractor with: topics={use_topics}, "
+                  f"sentiment={use_sentiment}, metrics={use_metrics}, embeddings={use_embeddings}")
         
-        # Initialize transformers if requested
-        if use_transformers:
-            self._load_transformers()
-    
-    def _load_spacy(self):
-        """Load spaCy NER model."""
+    def load_spacy_model(self):
+        """
+        Load the spaCy NLP model for named entity recognition.
+        """
+        if not self.use_spacy:
+            return
+            
         try:
             import spacy
-            if not spacy.util.is_package(self.model_name):
-                logger.warning(f"spaCy model '{self.model_name}' not found, downloading...")
-                spacy.cli.download(self.model_name)
-            
             self.nlp = spacy.load(self.model_name)
             logger.info(f"Loaded spaCy model: {self.model_name}")
         except Exception as e:
-            logger.error(f"Error loading spaCy model: {str(e)}")
+            logger.error(f"Failed to load spaCy model: {e}")
             self.use_spacy = False
     
-    def _load_transformers(self):
-        """Load transformers NER pipeline."""
-        if not TRANSFORMERS_AVAILABLE:
-            logger.warning("Transformers library not available. Cannot use transformers for NER.")
-            self.use_transformers = False
+    def load_transformer_ner(self):
+        """
+        Load transformer-based NER pipeline.
+        """
+        if not self.use_transformers or not TRANSFORMERS_AVAILABLE:
             return
-        
+            
         try:
-            self.ner_pipeline = pipeline(
-                "token-classification", 
-                model=self.model_name,
-                aggregation_strategy="simple"
-            )
-            logger.info(f"Loaded transformers NER model: {self.model_name}")
+            self.ner_pipeline = pipeline('ner', model=self.model_name)
+            logger.info(f"Loaded transformer NER model: {self.model_name}")
         except Exception as e:
-            logger.error(f"Error loading transformers model: {str(e)}")
+            logger.error(f"Failed to load transformer NER model: {e}")
             self.use_transformers = False
-    
-    def extract_numerical_metrics(self, text: str) -> Dict[str, float]:
-        """
-        Extract numerical metrics from financial text.
-        
-        Args:
-            text: Input financial text
-            
-        Returns:
-            Dictionary of extracted metrics and their values
-        """
-        if not isinstance(text, str):
-            return {}
-        
-        # Dictionary to store extracted metrics
-        metrics = {}
-        
-        # Regular expressions for common financial metrics
-        patterns = {
-            # Revenue patterns
-            'revenue': r'(?:revenue|revenues|sales) of \$?(\d+(?:\.\d+)?)\s*(?:million|billion|m|b|k)?',
-            # Earnings/profit patterns
-            'earnings': r'(?:earnings|profit|income|ebitda) of \$?(\d+(?:\.\d+)?)\s*(?:million|billion|m|b|k)?',
-            # EPS patterns
-            'eps': r'(?:earnings per share|eps) of \$?(\d+(?:\.\d+)?)',
-            # Growth patterns
-            'growth': r'(?:growth|increase|grew|up) (?:by |of )?(\d+(?:\.\d+)?)%',
-            # Margin patterns
-            'margin': r'(?:margin|margins) of (\d+(?:\.\d+)?)%',
-            # Market share
-            'market_share': r'(?:market share|share) of (\d+(?:\.\d+)?)%',
-            # Guidance
-            'guidance': r'(?:guidance|forecast|expect|expects) .*?\$?(\d+(?:\.\d+)?)\s*(?:million|billion|m|b|k)?'
-        }
-        
-        # Extract metrics using regex patterns
-        for metric, pattern in patterns.items():
-            matches = re.finditer(pattern, text, re.IGNORECASE)
-            for i, match in enumerate(matches):
-                value_str = match.group(1)
-                try:
-                    value = float(value_str)
-                    if i == 0:
-                        metrics[metric] = value
-                    else:
-                        # If multiple matches, create indexed metrics
-                        metrics[f"{metric}_{i+1}"] = value
-                except ValueError:
-                    continue
-        
-        return metrics
-    
-    def extract_named_entities(self, text: str) -> Dict[str, List[str]]:
-        """
-        Extract named entities from text using spaCy or transformers.
-        
-        Args:
-            text: Input text
-            
-        Returns:
-            Dictionary mapping entity types to lists of entities
-        """
-        if not isinstance(text, str):
-            return {}
-        
-        entities = {}
-        
-        if self.use_spacy and self.nlp:
-            # Process text with spaCy
-            doc = self.nlp(text)
-            
-            # Extract entities
-            for ent in doc.ents:
-                if ent.label_ not in entities:
-                    entities[ent.label_] = []
-                if ent.text not in entities[ent.label_]:
-                    entities[ent.label_].append(ent.text)
-        
-        elif self.use_transformers and self.ner_pipeline:
-            # Process text with transformers
-            result = self.ner_pipeline(text)
-            
-            # Extract entities
-            for item in result:
-                entity_type = item['entity_group']
-                entity_text = item['word']
-                
-                if entity_type not in entities:
-                    entities[entity_type] = []
-                if entity_text not in entities[entity_type]:
-                    entities.append(entity_text)
-        
-        return entities
-    
-    def extract_sentiment_features(self, text: str) -> Dict[str, float]:
-        """
-        Extract sentiment-related features from text.
-        
-        Args:
-            text: Input text
-            
-        Returns:
-            Dictionary of sentiment features
-        """
-        if not isinstance(text, str):
-            return {}
-        
-        features = {}
-        
-        # Simple lexicon-based approach
-        positive_words = ['increase', 'growth', 'profit', 'gain', 'improved', 'positive',
-                          'strong', 'success', 'exceeded', 'better', 'record']
-        negative_words = ['decrease', 'decline', 'loss', 'dropped', 'negative', 'weak',
-                          'challenging', 'failed', 'below', 'worse', 'disappointing']
-        
-        # Count word occurrences
-        text_lower = text.lower()
-        positive_count = sum(text_lower.count(' ' + word + ' ') for word in positive_words)
-        negative_count = sum(text_lower.count(' ' + word + ' ') for word in negative_words)
-        
-        # Calculate simple sentiment metrics
-        total_count = positive_count + negative_count
-        if total_count > 0:
-            features['sentiment_polarity'] = (positive_count - negative_count) / total_count
-            features['sentiment_ratio'] = positive_count / (negative_count + 1)  # Avoid div by zero
-        else:
-            features['sentiment_polarity'] = 0
-            features['sentiment_ratio'] = 1
-        
-        features['positive_word_count'] = positive_count
-        features['negative_word_count'] = negative_count
-        
-        return features
-    
-    def extract_readability_features(self, text: str) -> Dict[str, float]:
-        """
-        Extract readability metrics from text.
-        
-        Args:
-            text: Input text
-            
-        Returns:
-            Dictionary of readability features
-        """
-        if not isinstance(text, str) or not text.strip():
-            return {}
-        
-        # Split into sentences and words
-        sentences = re.split(r'[.!?]+', text)
-        sentences = [s.strip() for s in sentences if s.strip()]
-        words = re.findall(r'\b\w+\b', text)
-        
-        # Calculate basic metrics
-        num_sentences = len(sentences)
-        num_words = len(words)
-        avg_sentence_len = num_words / num_sentences if num_sentences > 0 else 0
-        
-        # Calculate syllables (approximation)
-        def count_syllables(word):
-            word = word.lower()
-            if len(word) <= 3:
-                return 1
-            vowels = "aeiouy"
-            count = 0
-            prev_is_vowel = False
-            for char in word:
-                if char in vowels:
-                    if not prev_is_vowel:
-                        count += 1
-                    prev_is_vowel = True
-                else:
-                    prev_is_vowel = False
-            # Adjust for silent e at end
-            if word.endswith('e') and count > 1:
-                count -= 1
-            return max(1, count)
-        
-        syllable_counts = [count_syllables(word) for word in words]
-        num_syllables = sum(syllable_counts)
-        avg_syllables_per_word = num_syllables / num_words if num_words > 0 else 0
-        
-        # Calculate Flesch Reading Ease
-        # Higher scores are easier to read (90-100: Very easy, 0-30: Very difficult)
-        flesch = 206.835 - (1.015 * avg_sentence_len) - (84.6 * avg_syllables_per_word)
-        
-        # Calculate Gunning Fog Index
-        # Estimates years of formal education needed to understand the text
-        complex_words = sum(1 for count in syllable_counts if count >= 3)
-        complex_pct = complex_words / num_words if num_words > 0 else 0
-        fog = 0.4 * (avg_sentence_len + 100 * complex_pct)
-        
-        # Return readability metrics
-        return {
-            'avg_sentence_length': avg_sentence_len,
-            'avg_syllables_per_word': avg_syllables_per_word,
-            'flesch_reading_ease': flesch,
-            'gunning_fog_index': fog,
-            'complex_word_pct': complex_pct * 100,  # Convert to percentage
-        }
     
     def extract_financial_metrics(self, text: str) -> Dict[str, float]:
         """
-        Extract financial metrics and ratios from text.
+        Extract financial metrics and ratios from text using regex patterns.
         
         Args:
-            text: Input financial text
+            text (str): Input financial text
             
         Returns:
-            Dictionary of financial metrics
+            dict: Dictionary of extracted financial metrics
         """
+        if not isinstance(text, str):
+            return {}
+        
         metrics = {}
         
         # Patterns for common financial metrics with units
         patterns = {
-            # Revenue with units
             'revenue_million': r'revenue (?:of )?\$?(\d+(?:\.\d+)?)\s*million',
             'revenue_billion': r'revenue (?:of )?\$?(\d+(?:\.\d+)?)\s*billion',
-            # Profit margins
             'gross_margin': r'gross margin (?:of )?(\d+(?:\.\d+)?)%',
             'operating_margin': r'operating margin (?:of )?(\d+(?:\.\d+)?)%',
             'profit_margin': r'(?:profit|net) margin (?:of )?(\d+(?:\.\d+)?)%',
-            # EPS related
             'eps': r'(?:EPS|earnings per share) (?:of )?\$?(\d+(?:\.\d+)?)',
             'diluted_eps': r'diluted (?:EPS|earnings per share) (?:of )?\$?(\d+(?:\.\d+)?)',
-            # Growth rates
             'yoy_growth': r'(?:year[- ]over[- ]year|y-o-y|yoy) growth (?:of )?(\d+(?:\.\d+)?)%',
             'qoq_growth': r'(?:quarter[- ]over[- ]quarter|q-o-q|qoq) growth (?:of )?(\d+(?:\.\d+)?)%',
-            # Cash and debt
             'cash': r'cash (?:and cash equivalents )?(?:of )?\$?(\d+(?:\.\d+)?)\s*(?:million|billion)',
             'debt': r'(?:debt|loans) (?:of )?\$?(\d+(?:\.\d+)?)\s*(?:million|billion)',
         }
@@ -326,310 +146,351 @@ class FeatureExtractor:
         # Extract metrics
         for name, pattern in patterns.items():
             matches = re.finditer(pattern, text, re.IGNORECASE)
-            for match in matches:
-                value_str = match.group(1)
-                try:
-                    value = float(value_str)                    # Convert billions to millions for consistency
-                    if 'billion' in name:
-                        value = value * 1000
-                    metrics[name] = value
-                except ValueError:
-                    continue
+            for i, match in enumerate(matches):
+                # If multiple matches, use suffix to distinguish
+                key = f"{name}_{i+1}" if i > 0 else name
+                value = float(match.group(1))
+                metrics[key] = value
         
         return metrics
-        
-    def extract_features(self, df: pd.DataFrame, text_column: str, 
-                        include_embeddings: bool = True,
-                        include_topics: bool = True,
-                        include_sentiment: bool = True) -> Tuple[np.ndarray, List[str]]:
+    
+    def extract_metrics_from_texts(self, texts: List[str]) -> Tuple[np.ndarray, List[str]]:
         """
-        Extract features from a dataframe with text data.
+        Extract financial metrics from a list of texts.
+        
+        Args:
+            texts: List of text documents
+            
+        Returns:
+            tuple: (feature matrix, feature names)
+        """
+        if not self.use_metrics:
+            return None, []
+            
+        metric_features = []
+        all_keys = set()
+        all_metrics = []
+        
+        # First pass: extract metrics and collect all keys
+        for text in texts:
+            metrics = self.extract_financial_metrics(text)
+            all_keys.update(metrics.keys())
+            all_metrics.append(metrics)
+        
+        feature_names = sorted(list(all_keys))
+        
+        # Second pass: create feature matrix with consistent columns
+        for metrics in all_metrics:
+            values = [metrics.get(name, 0.0) for name in feature_names]
+            metric_features.append(values)
+        
+        return np.array(metric_features), feature_names
+    def create_document_term_matrix(self, texts: List[str], save_path: str = None) -> Tuple:
+        """
+        Create a document-term matrix from cleaned texts
+        
+        Args:
+            texts: Cleaned text data
+            save_path: Path to save the vectorizer
+            
+        Returns:
+            tuple: (document-term matrix, vectorizer object, feature names)
+        """
+        from nltk.corpus import stopwords
+        stops = stopwords.words('english')
+        
+        vec = CountVectorizer(
+            token_pattern=r'\b[a-zA-Z_]{3,}[a-zA-Z]*\b',
+            ngram_range=NGRAM_RANGE,
+            max_features=MAX_FEATURES,            stop_words=stops,
+            max_df=MAX_DOC_FREQ
+        )
+        
+        dtm = vec.fit_transform(texts)
+        vocab = vec.get_feature_names_out()
+        
+        logger.info(f"DTM shape (documents x features): {dtm.shape}")
+        
+        if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            with open(save_path, 'wb') as f:
+                pickle.dump(vec, f)
+            logger.info(f"Vectorizer saved to {save_path}")
+        
+        self.vectorizer = vec
+        return dtm, vec, vocab
+    
+    def set_topic_model(self, model):
+        """Set the topic model to use for feature extraction"""
+        self.topic_model = model
+        return self
+    
+    def set_sentiment_analyzer(self, analyzer):
+        """Set the sentiment analyzer to use for feature extraction"""
+        self.sentiment_analyzer = analyzer
+        return self
+    
+    def set_embedding_model(self, model, vectorizer=None):
+        """Set the embedding model to use for text embeddings"""
+        self.embedding_model = model
+        if vectorizer:
+            self.vectorizer = vectorizer
+        return self
+    
+    def extract_topic_features(self, texts: List[str]) -> Tuple[np.ndarray, List[str]]:
+        """Extract topic distribution features from texts"""
+        if not self.use_topics or not self.topic_model:
+            logger.warning("Topic model not set or disabled, skipping topic feature extraction")
+            return None, []
+        
+        # Log model expected feature count for debugging
+        expected_model_features = 0
+        if hasattr(self.topic_model.model, 'components_'):
+            expected_model_features = self.topic_model.model.components_.shape[1]
+            logger.info(f"Topic model expects features: {expected_model_features}")
+        
+        # CRITICAL FIX: Use the vectorizer from the topic model if available
+        if hasattr(self.topic_model, 'vectorizer') and self.topic_model.vectorizer is not None:
+            # Use the vectorizer that was used to train the topic model
+            dtm = self.topic_model.vectorizer.transform(texts)
+            logger.info(f"Using topic model vectorizer, DTM shape: {dtm.shape}")
+        elif hasattr(self.embedding_model, 'vectorizer') and self.embedding_model.vectorizer is not None:
+            # Fall back to embedding vectorizer if available
+            dtm = self.embedding_model.vectorizer.transform(texts)
+            logger.info(f"Using embedding model vectorizer, DTM shape: {dtm.shape}")
+        else:
+            # Only create a new vectorizer as a last resort
+            # And make sure to use the same parameters as when training the topic model
+            logger.warning("No existing vectorizer found, creating a new one. This may cause dimension mismatches.")
+            
+            # Try to match the dimensions of the trained model
+            expected_features = expected_model_features if expected_model_features > 0 else MAX_FEATURES
+            logger.info(f"Creating new DTM with expected features: {expected_features}")
+            
+            dtm, _, _ = self.create_document_term_matrix(texts, max_features=expected_features)
+        
+        try:
+            topic_distributions = self.topic_model.transform(dtm)
+            logger.info(f"Topic distributions shape: {topic_distributions.shape}")
+        except Exception as e:
+            logger.error(f"Error transforming DTM: {e}. DTM shape: {dtm.shape}")
+            if expected_model_features > 0:
+                logger.error(f"Topic model expects {expected_model_features} features, but received {dtm.shape[1]}")
+            raise
+        
+        # Create feature names for topics
+        topic_feature_names = [f"topic_{i}" for i in range(topic_distributions.shape[1])]
+        
+        return topic_distributions, topic_feature_names
+    
+    def extract_sentiment_features(self, texts: List[str]) -> Tuple[np.ndarray, List[str]]:
+        """Extract sentiment features from texts"""
+        if not self.use_sentiment or not self.sentiment_analyzer:
+            logger.warning("Sentiment analyzer not set or disabled, skipping sentiment feature extraction")
+            return None, []
+        
+        sentiment_features = []
+        feature_names = []
+        
+        for text in texts:
+            sentiment = self.sentiment_analyzer.analyze(text)
+            sentiment_features.append(list(sentiment.values()))
+            
+            # Set feature names on first iteration
+            if not feature_names:
+                feature_names = [f"sentiment_{k}" for k in sentiment.keys()]
+        
+        return np.array(sentiment_features), feature_names
+    
+    def extract_embedding_features(self, texts: List[str], reduce_dim: int = None) -> Tuple[np.ndarray, List[str]]:
+        """Extract text embedding features"""
+        if not self.use_embeddings or not self.embedding_model:
+            logger.warning("Embedding model not set or disabled, skipping embedding feature extraction")
+            return None, []
+        
+        # Generate embeddings
+        embeddings = self.embedding_model.transform(texts)
+        
+        # Reduce dimensionality if requested
+        if reduce_dim and reduce_dim < embeddings.shape[1]:
+            svd = TruncatedSVD(n_components=reduce_dim, random_state=42)
+            embeddings = svd.fit_transform(embeddings)
+            feature_names = [f"embedding_{i}" for i in range(reduce_dim)]
+        else:
+            feature_names = [f"embedding_{i}" for i in range(embeddings.shape[1])]
+        
+        return embeddings, feature_names
+    
+    def extract_features(self, df, text_column='text') -> Tuple[np.ndarray, List[str]]:
+        """
+        Extract all features from text data.
         
         Args:
             df: DataFrame containing text data
             text_column: Name of column containing text
-            include_embeddings: Whether to include embedding features
-            include_topics: Whether to include topic features
-            include_sentiment: Whether to include sentiment features
             
         Returns:
-            Tuple of (feature_matrix, feature_names)
+            tuple: (feature matrix, feature names)
         """
-        logger.info(f"Extracting features from {len(df)} texts")
-        features_list = []
-        feature_names = []
-        all_features = pd.DataFrame()  # Initialize all_features as an empty DataFrame
+        texts = df[text_column].fillna('').tolist()
+        features = []
+        all_feature_names = []
         
-        # Extract base features using the per-text method
-        base_features_df = pd.DataFrame([self.extract_text_features(text) for text in df[text_column].fillna('')])
-        if not base_features_df.empty:
-            features_list.append(base_features_df)
-            feature_names.extend(base_features_df.columns.tolist())
+        # Extract topic features if enabled
+        if self.use_topics and self.topic_model:
+            topic_features, topic_names = self.extract_topic_features(texts)
+            if topic_features is not None:
+                features.append(topic_features)
+                all_feature_names.extend(topic_names)
+                logger.info(f"Added {len(topic_names)} topic features")
         
-        # Add sentiment features if requested
-        if include_sentiment and hasattr(self, 'sentiment_analyzer'):
-            logger.info("Adding sentiment features")
-            try:
-                sentiment_df = self.sentiment_analyzer.batch_analyze(df[text_column].fillna('').tolist())
-                if not sentiment_df.empty:
-                    # Add prefix to avoid name collisions
-                    sentiment_df = sentiment_df.add_prefix('sentiment_')
-                    features_list.append(sentiment_df)
-                    feature_names.extend(sentiment_df.columns.tolist())
-            except Exception as e:
-                logger.error(f"Error extracting sentiment features: {str(e)}")
+        # Extract sentiment features if enabled
+        if self.use_sentiment and self.sentiment_analyzer:
+            sentiment_features, sentiment_names = self.extract_sentiment_features(texts)
+            if sentiment_features is not None:
+                features.append(sentiment_features)
+                all_feature_names.extend(sentiment_names)
+                logger.info(f"Added {len(sentiment_names)} sentiment features")
         
-        # Add topic features if requested
-        if include_topics and hasattr(self, 'topic_modeler') and hasattr(self, 'embedding_processor'):
-            logger.info("Adding topic features")
-            try:
-                # Get document-term matrix
-                texts = df[text_column].fillna('').tolist()
-                if hasattr(self.embedding_processor, 'vectorizer'):
-                    dtm = self.embedding_processor.vectorizer.transform(texts)
-                    
-                    # Get document-topic distributions
-                    doc_topics = self.topic_modeler.get_document_topics(dtm)
-                    
-                    # Create topic feature dataframe
-                    topic_cols = [f"topic_{i}" for i in range(doc_topics.shape[1])]
-                    topic_df = pd.DataFrame(doc_topics, columns=topic_cols)
-                    
-                    features_list.append(topic_df)
-                    feature_names.extend(topic_cols)
-            except Exception as e:
-                logger.error(f"Error extracting topic features: {str(e)}")
+        # Extract financial metric features if enabled
+        if self.use_metrics:
+            metric_features, metric_names = self.extract_metrics_from_texts(texts)
+            if metric_features is not None:
+                features.append(metric_features)
+                all_feature_names.extend(metric_names)
+                logger.info(f"Added {len(metric_names)} financial metric features")
         
-        # Add embedding features if requested
-        if include_embeddings and hasattr(self, 'embedding_processor'):
-            logger.info("Adding embedding features")
-            try:
-                # Use a dimensionality-reduced version or top features only
-                # to avoid having too many features
-                if hasattr(self.embedding_processor, 'vectorizer'):
-                    # For sparse matrices (BOW, TF-IDF), select top features by variance
-                    dtm = self.embedding_processor.vectorizer.transform(df[text_column].fillna('').tolist())
-                    
-                    # Take only up to 100 features to avoid dimensionality issues
-                    max_features = min(100, dtm.shape[1])
-                    
-                    # Get feature names
-                    if hasattr(self.embedding_processor, 'vocab'):
-                        vocab = self.embedding_processor.vocab[:max_features]
-                    else:
-                        vocab = [f"feature_{i}" for i in range(max_features)]
-                    
-                    # Convert to dense and take first max_features columns
-                    embedding_features = dtm.todense()[:, :max_features]
-                    embedding_df = pd.DataFrame(embedding_features, columns=[f"embedding_{v}" for v in vocab])
-                    
-                    features_list.append(embedding_df)
-                    feature_names.extend(embedding_df.columns.tolist())
-            except Exception as e:
-                logger.error(f"Error extracting embedding features: {str(e)}")
+        # Extract embedding features if enabled
+        if self.use_embeddings and self.embedding_model:
+            embedding_features, embedding_names = self.extract_embedding_features(texts, reduce_dim=50)
+            if embedding_features is not None:
+                features.append(embedding_features)
+                all_feature_names.extend(embedding_names)
+                logger.info(f"Added {len(embedding_names)} embedding features")
         
-        # Combine all features
-        if not features_list:
-            logger.warning("No features were extracted")
-            return np.array([]), []
+        if not features:
+            raise ValueError("No features extracted. Check feature extraction settings and models.")
         
-        # Concatenate all feature dataframes
-        all_features = pd.concat(features_list, axis=1)
+        # Combine all feature sets
+        combined_features = np.hstack(features)
+        self.feature_names = all_feature_names
         
-        # Convert to numpy array for sklearn compatibility
-        feature_matrix = all_features.values
-        
-        logger.info(f"Extracted {feature_matrix.shape[1]} features")
-        return feature_matrix, all_features.columns.tolist()
+        logger.info(f"Total features extracted: {combined_features.shape[1]}")
+        return combined_features, all_feature_names
     
-    def extract_text_features(self, text: str) -> Dict[str, Union[float, str]]:
+    def combine_features(self, topic_features=None, sentiment_features=None, 
+                        financial_features=None, embeddings=None) -> Tuple[np.ndarray, List[str]]:
         """
-        Extract features from a single text.
+        Combine different types of features into a single feature matrix.
         
         Args:
-            text: Input text
+            topic_features: Topic distribution features
+            sentiment_features: Sentiment analysis features
+            financial_features: Extracted financial metrics
+            embeddings: Text embedding features
             
         Returns:
-            Dictionary of features
+            tuple: (Combined feature matrix, List of feature names)
         """
-        if not isinstance(text, str):
-            return {}
+        features_to_combine = []
+        feature_names = []
         
-        # Combine all feature extraction methods
-        features = {}
+        # Add topic features if provided
+        if topic_features is not None:
+            features_to_combine.append(topic_features)
+            feature_names.extend([f"topic_{i}" for i in range(topic_features.shape[1])])
+            logger.info(f"Added {topic_features.shape[1]} topic features")
         
-        # Extract numerical metrics
-        numerical_metrics = self.extract_numerical_metrics(text)
-        features.update(numerical_metrics)
+        # Add sentiment features if provided
+        if sentiment_features is not None:
+            features_to_combine.append(sentiment_features)
+            if isinstance(sentiment_features, pd.DataFrame):
+                feature_names.extend(sentiment_features.columns)
+                sentiment_features = sentiment_features.values
+            else:
+                feature_names.extend([f"sentiment_{i}" for i in range(sentiment_features.shape[1])])
+            logger.info(f"Added {sentiment_features.shape[1]} sentiment features")
         
-        # Extract basic sentiment features
-        sentiment_features = self.extract_sentiment_features(text)
-        features.update(sentiment_features)
+        # Add financial features if provided
+        if financial_features is not None:
+            features_to_combine.append(financial_features)
+            if isinstance(financial_features, pd.DataFrame):
+                feature_names.extend(financial_features.columns)
+                financial_features = financial_features.values
+            else:
+                feature_names.extend([f"financial_{i}" for i in range(financial_features.shape[1])])
+            logger.info(f"Added {financial_features.shape[1]} financial features")
         
-        # Extract readability features
-        readability_features = self.extract_readability_features(text)
-        features.update(readability_features)
+        # Add embedding features if provided
+        if embeddings is not None:
+            # Optionally reduce dimensionality if embeddings are too large
+            if embeddings.shape[1] > 50:
+                svd = TruncatedSVD(n_components=50, random_state=42)
+                embeddings = svd.fit_transform(embeddings)
+                logger.info(f"Reduced embedding dimensions from {embeddings.shape[1]} to 50")
+            
+            features_to_combine.append(embeddings)
+            feature_names.extend([f"embedding_{i}" for i in range(embeddings.shape[1])])
+            logger.info(f"Added {embeddings.shape[1]} embedding features")
         
-        # Extract financial metrics
-        financial_metrics = self.extract_financial_metrics(text)
-        features.update(financial_metrics)
+        if not features_to_combine:
+            raise ValueError("No features provided to combine")
         
-        # Extract named entities (add top entities only to avoid too many features)
-        entities = self.extract_named_entities(text)
-        for entity_type, entity_list in entities.items():
-            if entity_list:
-                # Add only first entity of each type
-                features[f"entity_{entity_type}"] = entity_list[0]
+        # Handle case of only one feature set
+        if len(features_to_combine) == 1:
+            return features_to_combine[0], feature_names
         
-        return features
+        # Otherwise combine all features horizontally
+        combined_features = np.hstack(features_to_combine)
+        logger.info(f"Combined feature matrix shape: {combined_features.shape}")
         
-    def fit(self, texts: List[str], targets=None) -> 'FeatureExtractor':
+        return combined_features, feature_names
+    
+    def set_feature_importances(self, importances, feature_names=None):
         """
-        Fit the feature extractor (extract feature importance if targets provided).
+        Set feature importance values.
         
         Args:
-            texts: List of text documents
-            targets: Optional target values for feature importance
-            
-        Returns:
-            Self for method chaining
+            importances: Array of feature importance values
+            feature_names: Feature names (optional)
         """
-        if not texts:
-            logger.warning("Empty text list provided to fit()")
-            return self
+        names = feature_names if feature_names is not None else self.feature_names
         
-        logger.info(f"Fitting feature extractor on {len(texts)} texts")
-        
-        # Extract features for all texts
-        all_features = []
-        for i, text in enumerate(texts):
-            if i % 100 == 0 and i > 0:
-                logger.info(f"Processed {i}/{len(texts)} texts")
-            
-            features = self.extract_features(text)
-            all_features.append(features)
-        
-        # Convert to DataFrame
-        features_df = pd.DataFrame(all_features)
-        
-        # Calculate feature importance if targets provided
-        if targets is not None and len(targets) == len(texts):
-            # Use correlation with target for feature importance
-            for col in features_df.columns:
-                if pd.api.types.is_numeric_dtype(features_df[col]):
-                    corr = features_df[col].corr(targets)
-                    self.feature_importance[col] = abs(corr)  # Use absolute correlation
+        if names is None or len(importances) != len(names):
+            logger.warning("Warning: Feature names don't match importance values")
+            self.feature_importance = {i: importance for i, importance in enumerate(importances)}
+        else:
+            self.feature_importance = {name: importance for name, importance in zip(names, importances)}
         
         return self
     
-    def transform(self, texts: List[str]) -> pd.DataFrame:
+    def get_top_features(self, n=20):
         """
-        Transform texts to feature matrix.
+        Get the top n most important features.
         
         Args:
-            texts: List of text documents
+            n: Number of top features to return
             
         Returns:
-            DataFrame of extracted features
-        """
-        if not texts:
-            logger.warning("Empty text list provided to transform()")
-            return pd.DataFrame()
-        
-        logger.info(f"Transforming {len(texts)} texts to features")
-        
-        # Extract features for all texts
-        all_features = []
-        for text in texts:
-            features = self.extract_features(text)
-            all_features.append(features)
-        
-        # Convert to DataFrame
-        return pd.DataFrame(all_features)
-    
-    def fit_transform(self, texts: List[str], targets=None) -> pd.DataFrame:
-        """
-        Fit and transform texts in one step.
-        
-        Args:
-            texts: List of text documents
-            targets: Optional target values for feature importance
-            
-        Returns:
-            DataFrame of extracted features
-        """
-        self.fit(texts, targets)
-        return self.transform(texts)
-    
-    def plot_feature_importance(self, top_n: int = 10) -> plt.Figure:
-        """
-        Plot feature importance.
-        
-        Args:
-            top_n: Number of top features to show
-            
-        Returns:
-            Matplotlib figure
+            pandas.DataFrame: DataFrame with feature names and importance values
         """
         if not self.feature_importance:
-            logger.warning("No feature importance available. Call fit() with targets first.")
-            fig, ax = plt.subplots()
-            ax.text(0.5, 0.5, "No feature importance available", 
-                   ha='center', va='center', transform=ax.transAxes)
-            return fig
+            logger.warning("Feature importances not set. Use set_feature_importances first.")
+            return pd.DataFrame(columns=["feature", "importance"])
         
-        # Create feature importance DataFrame
+        # Create sorted DataFrame of feature importances
         importance_df = pd.DataFrame({
-            'Feature': list(self.feature_importance.keys()),
-            'Importance': list(self.feature_importance.values())
-        }).sort_values('Importance', ascending=False)
+            "feature": list(self.feature_importance.keys()),
+            "importance": list(self.feature_importance.values())
+        })
         
-        # Get top N features
-        top_features = importance_df.head(top_n)
+        # Sort by absolute importance since negative values can be important too
+        importance_df["abs_importance"] = importance_df["importance"].abs()
+        importance_df = importance_df.sort_values("abs_importance", ascending=False).head(n)
+        importance_df = importance_df.drop("abs_importance", axis=1)
         
-        # Create plot
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.barplot(x='Importance', y='Feature', data=top_features, ax=ax)
-        ax.set_title(f'Top {top_n} Feature Importance')
-        ax.set_xlabel('Importance (Absolute Correlation)')
-        ax.set_ylabel('Feature')
-        plt.tight_layout()
-        
-        return fig
+        return importance_df
     
-    def set_embedding_processor(self, embedding_processor):
-        """
-        Set the embedding processor to use for embedding-based features.
-        
-        Args:
-            embedding_processor: EmbeddingProcessor instance to use
-        """
-        self.embedding_processor = embedding_processor
-        logger.info(f"Embedding processor set to {type(embedding_processor).__name__}")
-        return self
-
-    def set_sentiment_analyzer(self, sentiment_analyzer):
-        """
-        Set the sentiment analyzer to use for sentiment-based features.
-        
-        Args:
-            sentiment_analyzer: SentimentAnalyzer instance to use
-        """
-        self.sentiment_analyzer = sentiment_analyzer
-        logger.info(f"Sentiment analyzer set to {type(sentiment_analyzer).__name__}")
-        return self
-    
-    def set_topic_modeler(self, topic_modeler):
-        """
-        Set the topic modeler to use for topic-based features.
-        
-        Args:
-            topic_modeler: TopicModeler instance to use
-        """
-        self.topic_modeler = topic_modeler
-        logger.info(f"Topic modeler set to {type(topic_modeler).__name__}")
-        return self
-
     def get_feature_groups(self) -> Dict[str, List[str]]:
         """
         Get groups of features organized by type.
@@ -638,117 +499,119 @@ class FeatureExtractor:
             Dictionary mapping feature group names to lists of feature names
         """
         feature_groups = {
-            'sentiment': ['sentiment_polarity', 'sentiment_ratio', 'positive_word_count', 'negative_word_count'],
-            'readability': ['avg_sentence_length', 'avg_syllables_per_word', 'flesch_reading_ease', 
-                        'gunning_fog_index', 'complex_word_pct'],
-            'financial': ['revenue', 'earnings', 'eps', 'growth', 'margin', 'market_share', 'revenue_million', 
-                        'revenue_billion', 'gross_margin', 'operating_margin', 'profit_margin', 
-                        'diluted_eps', 'yoy_growth', 'qoq_growth', 'cash', 'debt', 'guidance'],
+            'sentiment': [],
+            'readability': [],
+            'financial': [],
             'entities': [],
-            'topics': []
+            'topics': [],
+            'embeddings': []
         }
-          # Add topic features if available
-        if hasattr(self, 'topic_modeler') and hasattr(self.topic_modeler, 'num_topics'):
-            feature_groups['topics'] = [f'topic_{i}' for i in range(self.topic_modeler.num_topics)]
         
-        # Add entity features if any were extracted
-        if hasattr(self, 'feature_names'):
-            entity_features = [f for f in self.feature_names if f.startswith('entity_')]
-            if entity_features:
-                feature_groups['entities'] = entity_features
-                
-        return feature_groups
+        # Add available features to their respective groups
+        for feature in self.feature_names if self.feature_names else []:
+            if feature.startswith('sentiment_'):
+                feature_groups['sentiment'].append(feature)
+            elif feature.startswith('topic_'):
+                feature_groups['topics'].append(feature)
+            elif feature.startswith('entity_'):
+                feature_groups['entities'].append(feature)
+            elif feature.startswith('embedding_'):
+                feature_groups['embeddings'].append(feature)
+            elif any(f in feature for f in ['revenue', 'earnings', 'eps', 'margin', 'growth', 'cash', 'debt']):
+                feature_groups['financial'].append(feature)
+            elif any(f in feature for f in ['reading', 'sentence', 'syllable', 'fog']):
+                feature_groups['readability'].append(feature)
         
-    def extract_features(self, df, text_column, include_embeddings=True, include_topics=True, include_sentiment=True):
+        # Remove empty groups
+        return {k: v for k, v in feature_groups.items() if v}
+    
+    def plot_feature_importance(self, n=20, figsize=(12, 10)):
         """
-        Extract features from a dataframe with text data.
-        This is a simplified version for backward compatibility.
+        Plot feature importances.
         
         Args:
-            df: DataFrame containing text data
-            text_column: Name of column containing text
-            include_embeddings: Whether to include embedding features
-            include_topics: Whether to include topic features
-            include_sentiment: Whether to include sentiment features
+            n: Number of top features to show
+            figsize: Figure size
             
         Returns:
-            Tuple of (feature_matrix, feature_names)
+            matplotlib.figure.Figure: Figure object
         """
-        logger.info(f"Extracting features from {len(df)} texts")
-        features_list = []
-        feature_names = []
-        all_features = pd.DataFrame()  # Initialize all_features as an empty DataFrame
+        top_features = self.get_top_features(n)
         
-        # Extract base features using the per-text method
-        base_features_df = pd.DataFrame([self.extract_text_features(text) for text in df[text_column].fillna('')])
-        if not base_features_df.empty:
-            features_list.append(base_features_df)
-            feature_names.extend(base_features_df.columns.tolist())
+        plt.figure(figsize=figsize)
+        colors = ['red' if x < 0 else 'blue' for x in top_features['importance']]
+        plt.barh(y=top_features['feature'], width=top_features['importance'], color=colors)
+        plt.xlabel('Importance')
+        plt.ylabel('Feature')
+        plt.title(f'Top {n} Feature Importances')
+        plt.tight_layout()
         
-        # Combine all features if we have any
-        if features_list:
-            all_features = pd.concat(features_list, axis=1)
+        return plt.gcf()
         
-        # Convert all features to numeric type, handling non-numeric values
-        for col in all_features.columns:
-            if all_features[col].dtype == 'object':  # If column contains string/object data
-                # Remove non-numeric columns or convert them to numeric
-                try:
-                    all_features[col] = pd.to_numeric(all_features[col], errors='coerce')
-                except:
-                    logger.warning(f"Dropping non-numeric column: {col}")
-                    all_features = all_features.drop(columns=[col])
-        
-        # Drop any rows with NaN values that may have been introduced
-        all_features = all_features.fillna(0)
-        
-        # Update feature names after potential column removal
-        feature_names = all_features.columns.tolist()
-        
-        logger.info(f"Extracted {all_features.shape[1]} features")
-        return all_features.values, feature_names
-     
-
-    def save(self, path: str) -> None:
+    def save(self, path=None):
         """
         Save the feature extractor.
         
         Args:
-            path: Directory path to save model
+            path: Path to save the feature extractor. If None, use default from config.
         """
-        os.makedirs(path, exist_ok=True)
+        if path is None:
+            path = FEATURE_EXTRACTOR_PATH
+            
+        try:
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            
+            # Create a dictionary with the state to save
+            state = {
+                'use_topics': self.use_topics,
+                'use_sentiment': self.use_sentiment,
+                'use_metrics': self.use_metrics,
+                'use_embeddings': self.use_embeddings,
+                'use_spacy': self.use_spacy,
+                'use_transformers': self.use_transformers,
+                'feature_names': self.feature_names,
+                'feature_importance': self.feature_importance
+            }
+            
+            # Save the state
+            with open(path, 'wb') as f:
+                pickle.dump(state, f)
+                
+            logger.info(f"Feature extractor saved to {path}")
+        except Exception as e:
+            logger.error(f"Error saving feature extractor: {str(e)}")
+            # Re-raise the exception so the caller can handle it
+            raise
         
-        # Save configuration
-        config = {
-            'use_spacy': self.use_spacy,
-            'use_transformers': self.use_transformers,
-            'model_name': self.model_name,
-            'feature_importance': self.feature_importance
-        }
-        
-        joblib.dump(config, os.path.join(path, 'feature_extractor_config.joblib'))
-        logger.info(f"Feature extractor saved to {path}")
-    
     @classmethod
-    def load(cls, path: str) -> 'FeatureExtractor':
+    def load(cls, path=None):
         """
-        Load a feature extractor from disk.
+        Load a feature extractor.
         
         Args:
-            path: Directory path to load from
+            path: Path to load the feature extractor from. If None, use default from config.
             
         Returns:
-            Loaded FeatureExtractor instance
+            FeatureExtractor: Loaded feature extractor
         """
-        config = joblib.load(os.path.join(path, 'feature_extractor_config.joblib'))
+        if path is None:
+            path = FEATURE_EXTRACTOR_PATH
+        with open(path, 'rb') as f:
+            state = pickle.load(f)
         
+        # Create a new instance with the saved settings
         instance = cls(
-            use_spacy=config['use_spacy'],
-            use_transformers=config['use_transformers'],
-            model_name=config['model_name']
+            use_topics=state.get('use_topics', True),
+            use_sentiment=state.get('use_sentiment', True),
+            use_metrics=state.get('use_metrics', True),
+            use_embeddings=state.get('use_embeddings', False),
+            use_spacy=state.get('use_spacy', True),
+            use_transformers=state.get('use_transformers', False)
         )
         
-        instance.feature_importance = config['feature_importance']
+        # Restore state
+        instance.feature_names = state.get('feature_names')
+        instance.feature_importance = state.get('feature_importance')
         
-        logger.info(f"Feature extractor loaded from {path}")
         return instance

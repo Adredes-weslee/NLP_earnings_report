@@ -10,7 +10,12 @@ import os
 import json
 import hashlib
 import logging
+import sys
 from datetime import datetime
+
+# Import configuration
+from src.config import (RAW_DATA_PATH, PROCESSED_DATA_DIR, TEST_SIZE, 
+                  VAL_SIZE, RANDOM_STATE)
 
 # Set up logging
 logging.basicConfig(
@@ -24,17 +29,17 @@ logging.basicConfig(
 logger = logging.getLogger('data_pipeline')
 
 class DataPipeline:
-    def __init__(self, data_path, random_state=42, test_size=0.2, val_size=0.2):
+    def __init__(self, data_path=None, random_state=RANDOM_STATE, test_size=TEST_SIZE, val_size=VAL_SIZE):
         """
         Initialize the data pipeline with configuration
         
         Args:
-            data_path (str): Path to raw data file
+            data_path (str): Path to raw data file, defaults to RAW_DATA_PATH from config
             random_state (int): Random seed for reproducibility
             test_size (float): Proportion of data for test set
             val_size (float): Proportion of training data for validation
         """
-        self.data_path = data_path
+        self.data_path = data_path if data_path is not None else RAW_DATA_PATH
         self.random_state = random_state
         self.test_size = test_size
         self.val_size = val_size
@@ -84,7 +89,7 @@ class DataPipeline:
         }
         
         # Import text processor here to avoid circular imports
-        from .text_processor import TextProcessor
+        from src.data.text_processor import TextProcessor
         text_processor = TextProcessor()
         
         # Process the text column(s) - assumes 'text' column exists
@@ -101,6 +106,43 @@ class DataPipeline:
         self.processed_data = data
         logger.info("Preprocessing completed")
         return self.processed_data
+    
+    def clean_text(self, data=None):
+        """Cleans text in the dataframe using TextProcessor"""
+        if data is None:
+            data = self.raw_data.copy()
+        
+        from src.data.text_processor import TextProcessor
+        processor = TextProcessor()
+        
+        # Determine text column - use 'ea_text' as default if available
+        text_col = 'ea_text' if 'ea_text' in data.columns else 'text'
+        
+        data['clean_sent'] = data[text_col].apply(processor.clean_text)
+        self.processed_data = data
+        return data
+
+    def compute_text_statistics(self, text_column='clean_sent'):
+        """Compute statistics about the processed text"""
+        from src.data.data_processor import compute_text_statistics
+        return compute_text_statistics(self.processed_data, text_column)
+
+    def process_financial_data(self, data=None):
+        """Process financial metrics in the data"""
+        if data is None:
+            data = self.processed_data
+        
+        # Add financial processing logic or delegate to data_processor functions
+        # For now, just return the data
+        self.processed_data = data
+        return data
+
+    def generate_labels(self, threshold=0.05, column='BHAR0_2'):
+        """Generate binary labels based on a threshold"""
+        if column in self.processed_data.columns:
+            self.processed_data['label'] = (self.processed_data[column] > threshold).astype(int)
+        return self.processed_data
+    
     
     def split_data(self, data=None, target_column='BHAR0_2'):
         """Split data into train, validation and test sets"""
@@ -176,6 +218,23 @@ class DataPipeline:
             "val_path": f"{output_dir}/val_{self.data_version}.csv",
             "test_path": f"{output_dir}/test_{self.data_version}.csv",
             "config_path": f"{output_dir}/config_{self.data_version}.json"
+        }
+    
+    def get_data_paths(self, version_id):
+        """
+        Get paths to data files for a specific version
+        
+        Args:
+            version_id: The data version ID
+            
+        Returns:
+            dict: Paths to train, validation, and test data files
+        """
+        return {
+            "train": f"{PROCESSED_DATA_DIR}/train_{version_id}.csv",
+            "val": f"{PROCESSED_DATA_DIR}/val_{version_id}.csv",
+            "test": f"{PROCESSED_DATA_DIR}/test_{version_id}.csv",
+            "config": f"{PROCESSED_DATA_DIR}/config_{version_id}.json"
         }
     
     def run_pipeline(self, output_dir="data/processed"):

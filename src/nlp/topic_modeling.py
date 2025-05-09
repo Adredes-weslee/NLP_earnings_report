@@ -1,5 +1,5 @@
 """
-Topic modeling module for financial text analysis.
+Consolidated topic modeling module for financial text analysis.
 Provides LDA and transformer-based topic modeling for earnings reports.
 """
 
@@ -10,8 +10,18 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import joblib
+import pickle
+import sys
 from typing import List, Dict, Union, Optional, Tuple, Any
 from sklearn.decomposition import LatentDirichletAllocation, NMF
+from sklearn.feature_extraction.text import CountVectorizer
+
+# Import configuration values
+from ..config import (NUM_TOPICS, RANDOM_STATE, TOPIC_WORD_PRIOR, DOC_TOPIC_PRIOR_FACTOR,
+                  MAX_FEATURES, NGRAM_RANGE, MAX_DOC_FREQ, TOPIC_MODEL_PATH, MODEL_DIR,
+                  OPTIMAL_TOPICS, LDA_MAX_ITER, LDA_LEARNING_DECAY, LDA_LEARNING_OFFSET)
+from tmtoolkit.topicmod.evaluate import metric_coherence_gensim
+from wordcloud import WordCloud
 
 # Optional imports for BERTopic
 try:
@@ -27,8 +37,8 @@ class TopicModeler:
     Class for topic modeling on financial texts.
     Supports LDA, NMF, and BERTopic approaches.
     """
-    
-    def __init__(self, method: str = 'lda', num_topics: int = 40, random_state: int = 42):
+    def __init__(self, method: str = 'lda', num_topics: int = NUM_TOPICS, random_state: int = RANDOM_STATE,
+                 topic_word_prior: float = TOPIC_WORD_PRIOR, doc_topic_prior_factor: float = DOC_TOPIC_PRIOR_FACTOR):
         """
         Initialize the topic modeler.
         
@@ -36,11 +46,17 @@ class TopicModeler:
             method: Topic modeling method ('lda', 'nmf', 'bertopic')
             num_topics: Number of topics to extract (not used for BERTopic)
             random_state: Random seed for reproducibility
+            topic_word_prior: Topic-word prior for LDA (alpha)
+            doc_topic_prior_factor: Document-topic prior factor for LDA (beta)
         """
         self.method = method
         self.num_topics = num_topics
         self.random_state = random_state
+        self.topic_word_prior = topic_word_prior
+        self.doc_topic_prior_factor = doc_topic_prior_factor
+        
         self.model = None
+        self.vectorizer = None
         self.topic_words = None
         self.feature_names = None
         self.topic_word_distributions = None
@@ -49,548 +65,514 @@ class TopicModeler:
         
         # Check if BERTopic is available when needed
         if method == 'bertopic' and not BERTOPIC_AVAILABLE:
-            logger.warning("BERTopic method selected but library not available. "
-                          "Install with: pip install bertopic")
-            logger.warning("Falling back to LDA")
+            logger.warning("BERTopic method requested but not available. Falling back to LDA.")
             self.method = 'lda'
     
-    def _create_lda_model(self) -> LatentDirichletAllocation:
-        """Create a Latent Dirichlet Allocation model."""
-        return LatentDirichletAllocation(
-            n_components=self.num_topics,
-            max_iter=25,
-            learning_method='online',
-            learning_offset=50.,
-            random_state=self.random_state,
-            n_jobs=-1
-        )
-    
-    def _create_nmf_model(self) -> NMF:
-        """Create a Non-Negative Matrix Factorization model."""
-        return NMF(
-            n_components=self.num_topics,
-            random_state=self.random_state,
-            max_iter=1000,
-            alpha=.1,
-            l1_ratio=.5
-        )
-    
-    def _create_bertopic_model(self) -> Any:
-        """Create a BERTopic model."""
-        if not BERTOPIC_AVAILABLE:
-            raise ImportError("BERTopic is not available. Install with: pip install bertopic")
-        
-        return BERTopic(
-            nr_topics="auto",
-            language="english",
-            calculate_probabilities=True,
-            verbose=True
-        )
-    
-    def fit(self, document_term_matrix: Any, feature_names: List[str] = None, 
-            raw_documents: List[str] = None) -> 'TopicModeler':
+    def create_document_term_matrix(self, texts: List[str], save_path: str = None) -> Tuple:
         """
-        Fit the topic model to the document-term matrix.
+        Create a document-term matrix from cleaned texts
         
         Args:
-            document_term_matrix: DTM or embeddings depending on method
-            feature_names: List of feature/vocabulary names
-            raw_documents: Raw text for BERTopic (needed only for BERTopic)
+            texts: Cleaned text data
+            save_path: Path to save the vectorizer
             
         Returns:
-            Self for method chaining
+            tuple: (document-term matrix, vectorizer object, feature names)
         """
-        self.feature_names = feature_names
+        from nltk.corpus import stopwords
+        stops = stopwords.words('english')
+        vec = CountVectorizer(
+            token_pattern=r'\b[a-zA-Z_]{3,}[a-zA-Z]*\b',
+            ngram_range=NGRAM_RANGE,
+            max_features=MAX_FEATURES,
+            stop_words=stops,
+            max_df=MAX_DOC_FREQ
+        )
         
-        if self.method == 'lda':
-            model = self._create_lda_model()
-            self.model = model.fit(document_term_matrix)
-            self.topic_word_distributions = self.model.components_
-            
-        elif self.method == 'nmf':
-            model = self._create_nmf_model()
-            self.model = model.fit(document_term_matrix)
-            self.topic_word_distributions = self.model.components_
-            
-        elif self.method == 'bertopic':
-            if raw_documents is None:
-                raise ValueError("Raw documents are required for BERTopic model")
-            
-            model = self._create_bertopic_model()
-            self.model = model.fit(raw_documents, document_term_matrix)
-            
-            # For compatibility with other methods
-            if hasattr(self.model, 'get_topic_info'):
-                topic_info = self.model.get_topic_info()
-                self.num_topics = len(topic_info) - 1  # Excluding -1 topic (outliers)
+        dtm = vec.fit_transform(texts)
+        vocab = vec.get_feature_names_out()
         
-        # Extract top words for each topic
-        self._extract_topic_words()
+        logger.info(f"DTM shape (documents x features): {dtm.shape}")
         
-        logger.info(f"Topic model fitted with {self.num_topics} topics")
-        return self
+        if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            with open(save_path, 'wb') as f:
+                pickle.dump(vec, f)
+            logger.info(f"Vectorizer saved to {save_path}")
+        
+        self.vectorizer = vec
+        self.feature_names = vocab
+        return dtm, vec, vocab
     
-    def _extract_topic_words(self, top_n: int = 20) -> None:
+    def optimize_num_topics(self, dtm, vocab=None, 
+                           min_topics: int = 10, max_topics: int = 100, step: int = 5, 
+                           sample_size: int = 2000, save_results: bool = True,
+                           output_dir: str = None) -> List[Dict[str, Any]]:
         """
-        Extract the top words for each topic.
+        Tune LDA model by testing a range of topic counts
         
         Args:
-            top_n: Number of top words to extract per topic
-        """
-        if self.model is None:
-            logger.warning("Model not fitted yet")
-            return
-        
-        self.topic_words = {}
-        
-        if self.method in ['lda', 'nmf']:
-            if self.topic_word_distributions is None or self.feature_names is None:
-                logger.warning("Topic word distributions or feature names not available")
-                return
-                
-            for topic_idx, topic in enumerate(self.topic_word_distributions):
-                # Sort words by their weight in the topic
-                sorted_indices = topic.argsort()[:-top_n-1:-1]
-                top_words = [self.feature_names[i] for i in sorted_indices]
-                self.topic_words[topic_idx] = top_words
-                
-        elif self.method == 'bertopic':
-            if hasattr(self.model, 'get_topics'):
-                bert_topics = self.model.get_topics()
-                
-                for topic_id, word_scores in bert_topics.items():
-                    if topic_id != -1:  # Skip outlier topic
-                        # Get top words and their scores
-                        top_words = [word for word, _ in word_scores[:top_n]]
-                        self.topic_words[topic_id] = top_words
-    
-    def transform(self, document_term_matrix: Any) -> np.ndarray:
-        """
-        Transform documents to topic distributions.
-        
-        Args:
-            document_term_matrix: Document-term matrix or embeddings
+            dtm: Document-term matrix
+            vocab: List of vocabulary terms (if None, uses self.feature_names)
+            min_topics: Minimum number of topics to try
+            max_topics: Maximum number of topics to try
+            step: Step size for topic count
+            sample_size: Number of documents to sample for tuning
+            save_results: Whether to save the tuning results
+            output_dir: Directory to save results
             
         Returns:
-            Document-topic matrix (probabilities)
+            List of dictionaries with coherence scores by topic count
         """
-        if self.model is None:
-            raise ValueError("Model not fitted yet")
+        vocab_to_use = vocab if vocab is not None else self.feature_names
         
-        if self.method in ['lda', 'nmf']:
-            return self.model.transform(document_term_matrix)
-            
-        elif self.method == 'bertopic':
-            if hasattr(self.model, 'transform'):
-                topics, probs = self.model.transform(document_term_matrix)
-                
-                # Convert to document-topic matrix format
-                doc_topic_matrix = np.zeros((len(topics), self.num_topics))
-                for i, (doc_topics, doc_probs) in enumerate(zip(topics, probs)):
-                    for topic, prob in zip(doc_topics, doc_probs):
-                        if topic != -1 and topic < self.num_topics:  # Skip outlier topic
-                            doc_topic_matrix[i, topic] = prob
-                
-                # Normalize rows to sum to 1
-                row_sums = doc_topic_matrix.sum(axis=1, keepdims=True)
-                row_sums[row_sums == 0] = 1  # Avoid division by zero
-                doc_topic_matrix = doc_topic_matrix / row_sums
-                
-                return doc_topic_matrix
-            else:
-                raise NotImplementedError("Transform not implemented for this BERTopic version")
-    
-    def get_top_words(self, topic_id: int = None, top_n: int = 10) -> Union[Dict[int, List[str]], List[str]]:
-        """
-        Get top words for a specific topic or all topics.
-        
-        Args:
-            topic_id: Topic ID (if None, return all topics)
-            top_n: Number of top words to return
-            
-        Returns:
-            Dictionary of topic ID to list of top words, or list of top words for a specific topic
-        """
-        if self.topic_words is None:
-            self._extract_topic_words(top_n=top_n)
-        
-        if topic_id is not None:
-            if topic_id in self.topic_words:
-                return self.topic_words[topic_id][:top_n]
-            else:
-                logger.warning(f"Topic ID {topic_id} not found")
-                return []
+        if dtm.shape[0] <= sample_size:
+            sample = pd.DataFrame(dtm.todense())
         else:
-            return {k: v[:top_n] for k, v in self.topic_words.items()}
-    
-    def get_topics(self, num_words: int = 10) -> Dict[int, List[Union[str, Tuple[str, float]]]]:
-        """
-        Get top words for all topics - alias for get_top_words for API compatibility.
+            sample = pd.DataFrame(dtm.todense()).sample(sample_size, random_state=self.random_state)
         
-        Args:
-            num_words: Number of top words to return per topic
+        records = []
+        for top in range(min_topics, max_topics + 1, step):
+            logger.info(f"Fitting LDA with {top} topics...")
+            record = {'topics': top}
             
-        Returns:
-            Dictionary of topic ID to list of top words
-        """
-        return self.get_top_words(topic_id=None, top_n=num_words)
-    
-    def get_document_topics(self, document_term_matrix) -> np.ndarray:
-        """
-        Get document-topic distributions for a set of documents.
-        
-        Args:
-            document_term_matrix: Document-term matrix to transform
-            
-        Returns:
-            numpy.ndarray: Document-topic matrix where each row represents 
-                        a document and each column represents a topic
-        """
-        if not hasattr(self, 'model'):
-            raise ValueError("Model not fitted. Call fit() first.")
-        
-        if self.method == 'lda':
-            # LDA transform returns document-topic matrix directly
-            doc_topic_matrix = self.model.transform(document_term_matrix)
-            return doc_topic_matrix
-        
-        elif self.method == 'nmf':
-            # NMF transform also returns document-topic matrix
-            doc_topic_matrix = self.model.transform(document_term_matrix)
-            return doc_topic_matrix
-        
-        elif self.method == 'bertopic' and BERTOPIC_AVAILABLE:
-            if hasattr(self.model, 'transform'):
-                # Get document-topic distributions
-                topics, probs = self.model.transform(document_term_matrix)
-                
-                # Convert to a proper document-topic matrix
-                num_docs = len(topics)
-                num_topics = self.num_topics
-                doc_topic_matrix = np.zeros((num_docs, num_topics))
-                
-                # Fill the matrix with topic probabilities
-                for i, (doc_topics, doc_probs) in enumerate(zip(topics, probs)):
-                    for topic, prob in zip(doc_topics, doc_probs):
-                        if topic >= 0 and topic < num_topics:  # Skip noise topic (-1)
-                            doc_topic_matrix[i, topic] = prob
-                
-                return doc_topic_matrix
-            else:
-                raise NotImplementedError("BERTopic transform not available")
-        
-        else:
-            raise ValueError(f"Unsupported method: {self.method}")
-    
-    def visualize_topics(self, top_n: int = 10) -> plt.Figure:
-        """
-        Visualize the top words for each topic.
-        
-        Args:
-            top_n: Number of top words to visualize per topic
-            
-        Returns:
-            Matplotlib figure
-        """
-        if self.model is None:
-            raise ValueError("Model not fitted yet")
-        
-        if self.method == 'bertopic' and hasattr(self.model, 'visualize_topics'):
-            try:
-                return self.model.visualize_topics()
-            except Exception as e:
-                logger.warning(f"BERTopic visualization failed: {str(e)}")
-                # Fall back to basic visualization
-        
-        # Basic visualization for LDA/NMF and fallback for BERTopic
-        num_topics_to_plot = min(8, self.num_topics)  # Plot at most 8 topics
-        
-        fig, axes = plt.subplots(2, 4, figsize=(20, 10))
-        axes = axes.flatten()
-        
-        for i, topic_id in enumerate(list(self.topic_words.keys())[:num_topics_to_plot]):
-            top_words = self.get_top_words(topic_id, top_n=top_n)
-            
-            # Plot horizontal bar chart
-            y_pos = np.arange(len(top_words))
-            
-            if self.method in ['lda', 'nmf'] and self.topic_word_distributions is not None:
-                # Get weights for the top words
-                topic_idx = topic_id
-                word_indices = [self.feature_names.index(word) for word in top_words]
-                weights = self.topic_word_distributions[topic_idx, word_indices]
-                
-                # Plot weights in descending order
-                sorted_indices = weights.argsort()[::-1]
-                weights = weights[sorted_indices]
-                top_words = [top_words[j] for j in sorted_indices]
-                
-                axes[i].barh(y_pos, weights)
-            else:
-                # Plot without weights
-                axes[i].barh(y_pos, np.ones(len(top_words)))
-            
-            axes[i].set_yticks(y_pos)
-            axes[i].set_yticklabels(top_words)
-            axes[i].invert_yaxis()
-            axes[i].set_title(f'Topic {topic_id}')
-        
-        plt.tight_layout()
-        return fig
-    
-    def compute_coherence_score(self, texts: List[str] = None) -> float:
-        """
-        Compute coherence score for the topic model.
-        
-        Args:
-            texts: List of tokenized texts (only needed for some methods)
-            
-        Returns:
-            Coherence score
-        """
-        try:
-            from gensim.models.coherencemodel import CoherenceModel
-            import gensim.corpora as corpora
-        except ImportError:
-            logger.warning("Gensim not available for coherence calculation")
-            return -1
-        
-        if texts is None:
-            logger.warning("Texts are required for coherence calculation")
-            return -1
-        
-        try:
-            # Preprocess texts to list of lists of tokens
-            tokenized_texts = [text.split() if isinstance(text, str) else text for text in texts]
-            
-            # Create gensim dictionary
-            dictionary = corpora.Dictionary(tokenized_texts)
-            
-            # Extract topic words as lists
-            topics = []
-            for topic_id in range(self.num_topics):
-                if topic_id in self.topic_words:
-                    topics.append(self.topic_words[topic_id])
-            
-            # Create coherence model
-            coherence_model = CoherenceModel(
-                topics=topics, 
-                texts=tokenized_texts, 
-                dictionary=dictionary, 
-                coherence='c_v'
+            doc_topic_prior = min(1.0, self.doc_topic_prior_factor/top)
+            lda = LatentDirichletAllocation(
+                n_components=top,
+                topic_word_prior=self.topic_word_prior,
+                doc_topic_prior=doc_topic_prior,  # Use scaled value
+                n_jobs=-1,
+                max_iter=LDA_MAX_ITER,
+                learning_decay=LDA_LEARNING_DECAY,
+                learning_offset=LDA_LEARNING_OFFSET,
+                random_state=self.random_state
             )
             
-            # Compute coherence
-            coherence = coherence_model.get_coherence()
-            logger.info(f"Topic coherence score: {coherence:.4f}")
-            return coherence
+            lda.fit(sample)
             
-        except Exception as e:
-            logger.error(f"Error computing coherence: {str(e)}")
-            return -1
+            umass = metric_coherence_gensim(
+                'u_mass',
+                topic_word_distrib=lda.components_,
+                vocab=vocab_to_use,
+                dtm=sample.values
+            )
+            
+            record['mean_umass'] = np.mean(umass)
+            records.append(record)
+        
+        if save_results and output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            results_df = pd.DataFrame(records)
+            results_df.to_csv(os.path.join(output_dir, 'lda_tuning_results.csv'), index=False)
+        
+        return records
     
-    def save(self, path: str) -> None:
+    def plot_topic_coherence(self, records: List[Dict[str, Any]], 
+                            save_plot: bool = True, 
+                            output_dir: str = None) -> Tuple[int, plt.Figure]:
         """
-        Save the topic model to disk.
+        Plot the topic coherence scores from LDA tuning
         
         Args:
-            path: Directory path to save the model
+            records: List of dictionaries with tuning results
+            save_plot: Whether to save the plot
+            output_dir: Directory to save the plot
+            
+        Returns:
+            tuple: (optimal topic count, plot)
         """
-        os.makedirs(path, exist_ok=True)
+        topic_counts = [rec['topics'] for rec in records]
+        umass_means = [rec['mean_umass'] for rec in records]
         
-        # Save model configuration
-        config = {
+        # Find optimal topic count (least negative coherence score)
+        optimal_idx = np.argmax(umass_means)
+        optimal_topics = topic_counts[optimal_idx]
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(topic_counts, umass_means, marker='o')
+        plt.axvline(x=optimal_topics, color='r', linestyle='--', 
+                    label=f'Optimal: {optimal_topics} topics')
+        plt.xlabel('Number of Topics')
+        plt.ylabel('Mean UMass Coherence')
+        plt.title('Topic Coherence vs. Number of Topics')
+        plt.legend()
+        plt.grid(True)
+        
+        if save_plot and output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            plt.savefig(os.path.join(output_dir, 'topic_coherence_plot.png'))
+        
+        # Update optimal number of topics
+        self.num_topics = optimal_topics
+        
+        return optimal_topics, plt.gcf()
+    
+    def fit(self, dtm, feature_names=None, vectorizer=None, n_topics=None, 
+        save_model=True, model_dir=None):
+        """
+        Fit the topic model with the specified number of topics
+        
+        Args:
+            dtm: Document-term matrix
+            feature_names: Optional list of feature names (vocabulary)
+            n_topics: Number of topics (if None, uses self.num_topics)
+            save_model: Whether to save the model
+            model_dir: Directory to save the model. If None, uses TOPIC_MODEL_PATH from config
+            
+        Returns:
+            tuple: (topic model, topic distribution matrix)
+        """
+        # Store feature names if provided
+        if feature_names is not None:
+            self.feature_names = feature_names
+        
+        # Update num_topics if provided and ensure it's an integer
+        if n_topics is not None:
+            self.num_topics = int(n_topics)
+        
+        # Store the vectorizer if provided
+        if vectorizer is not None:
+            self.vectorizer = vectorizer
+        
+        # Ensure num_topics is an integer regardless of how it was set
+        if not isinstance(self.num_topics, int):
+            self.num_topics = int(self.num_topics)
+        
+        logger.info(f"Fitting {self.method} model with {self.num_topics} topics...")
+        
+        if self.method == 'lda':            
+            # Calculate doc_topic_prior and ensure it's in valid range [0, 1]
+            doc_topic_prior = min(1.0, self.doc_topic_prior_factor/self.num_topics)
+            model = LatentDirichletAllocation(
+                n_components=self.num_topics,
+                topic_word_prior=self.topic_word_prior,
+                doc_topic_prior=doc_topic_prior,  # Use scaled value
+                n_jobs=-1,
+                max_iter=LDA_MAX_ITER,
+                learning_decay=LDA_LEARNING_DECAY,
+                learning_offset=LDA_LEARNING_OFFSET,
+                random_state=self.random_state
+            )
+        elif self.method == 'nmf':
+            model = NMF(
+                n_components=self.num_topics,
+                random_state=self.random_state
+            )
+        elif self.method == 'bertopic' and BERTOPIC_AVAILABLE:
+            model = BERTopic(
+                nr_topics=self.num_topics,
+                random_state=self.random_state
+            )
+        else:
+            raise ValueError(f"Unsupported topic modeling method: {self.method}")
+        
+        if self.method != 'bertopic':
+            model.fit(dtm)
+            topics = model.transform(dtm)
+            self.topic_word_distributions = model.components_
+        else:
+            # BERTopic requires documents, not DTM
+            if hasattr(dtm, 'todense'):
+                dtm = dtm.todense()
+            topics, _ = model.fit_transform(dtm)
+        
+        self.model = model
+        
+        logger.info(f"Topic distribution matrix shape: {topics.shape}")
+        
+        # Use config path if model_dir is not specified
+        save_dir = model_dir if model_dir is not None else TOPIC_MODEL_PATH
+        
+        if save_model:
+            os.makedirs(save_dir, exist_ok=True)
+            
+            # Save the model
+            model_path = os.path.join(save_dir, f'{self.method}_model.pkl')
+            with open(model_path, 'wb') as f:
+                pickle.dump(model, f)
+            logger.info(f"Topic model saved to {model_path}")
+            
+            # Save topic distributions if not too large
+            if topics.shape[0] * topics.shape[1] < 10000000:  # ~10M elements
+                # Fix: Use save_dir instead of model_dir
+                np.save(os.path.join(save_dir, 'topic_distributions.npy'), topics)
+                logger.info(f"Topic distributions saved to {os.path.join(save_dir, 'topic_distributions.npy')}")
+        
+        return model, topics
+    
+    def get_top_words(self, n_words: int = 10, 
+                     save_results: bool = True, 
+                     output_dir: Optional[str] = None) -> Dict[int, List[str]]:
+        """
+        Get the top words for each topic in the model
+        
+        Args:
+            n_words: Number of top words to extract per topic
+            save_results: Whether to save the results
+            output_dir: Directory to save the results
+            
+        Returns:
+            dict: Dictionary mapping topic indices to lists of top words
+        """
+        if self.model is None:
+            logger.error("Model not fitted. Call fit() first.")
+            return {}
+        
+        topics_words = {}
+        
+        if self.method in ['lda', 'nmf']:
+            for topic_idx, topic in enumerate(self.model.components_):
+                top_indices = topic.argsort()[-(n_words):][::-1]
+                top_words = [self.feature_names[i] for i in top_indices]
+                topics_words[topic_idx] = top_words
+        elif self.method == 'bertopic':
+            topics = self.model.get_topics()
+            for topic_idx in topics:
+                if topic_idx != -1:  # -1 is reserved for outliers in BERTopic
+                    topics_words[topic_idx] = [word for word, _ in self.model.get_topic(topic_idx)[:n_words]]
+        
+        self.topic_words = topics_words
+        
+        if save_results and output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Save as text file
+            with open(os.path.join(output_dir, 'topic_top_words.txt'), 'w') as f:
+                for topic_idx, words in topics_words.items():
+                    f.write(f"Topic {topic_idx}: {', '.join(words)}\n")
+            
+            # Save as JSON
+            with open(os.path.join(output_dir, 'topic_words.json'), 'w') as f:
+                json.dump(topics_words, f, indent=2)
+        
+        return topics_words
+    
+    def plot_wordcloud(self, topic_idx: int, n_words: int = 30, 
+                      figsize: Tuple[int, int] = (10, 6), 
+                      background_color: str = 'white') -> plt.Figure:
+        """
+        Generate a word cloud for a specific topic
+        
+        Args:
+            topic_idx: Index of the topic to visualize
+            n_words: Number of words to include
+            figsize: Figure size
+            background_color: Background color of the word cloud
+            
+        Returns:
+            matplotlib.figure.Figure: Word cloud figure
+        """
+        if self.model is None or self.feature_names is None:
+            logger.error("Model not fitted or feature names not available.")
+            return None
+        
+        # Get word weights for the topic
+        if self.method in ['lda', 'nmf']:
+            topic = self.model.components_[topic_idx]
+            word_weights = {self.feature_names[i]: topic[i] for i in topic.argsort()[:-n_words-1:-1]}
+        elif self.method == 'bertopic':
+            word_weights = {word: weight for word, weight in self.model.get_topic(topic_idx)[:n_words]}
+        else:
+            logger.error(f"Word cloud not supported for method {self.method}")
+            return None
+        
+        # Generate word cloud
+        wordcloud = WordCloud(
+            width=800, 
+            height=400, 
+            background_color=background_color,
+            colormap='viridis',
+            prefer_horizontal=1.0
+        ).generate_from_frequencies(word_weights)
+        
+        # Plot
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.imshow(wordcloud, interpolation='bilinear')
+        ax.set_title(f'Word Cloud for Topic {topic_idx}')
+        ax.axis('off')
+        
+        return fig
+    
+    def transform(self, dtm):
+        """
+        Transform document-term matrix to topic distributions
+        
+        Args:
+            dtm: Document-term matrix
+            
+        Returns:
+            array: Topic distributions for input documents
+        """
+        if self.model is None:
+            logger.error("Model not fitted. Call fit() first.")
+            return None
+        
+        if self.method in ['lda', 'nmf']:
+            return self.model.transform(dtm)
+        elif self.method == 'bertopic':
+            # BERTopic requires documents, not DTM
+            if hasattr(dtm, 'todense'):
+                dtm = dtm.todense()
+            topics, probs = self.model.transform(dtm)
+            return probs
+        else:
+            logger.error(f"Transform not supported for method {self.method}")
+            return None
+    
+    def save(self, path: str):
+        """
+        Save the topic modeler and model
+        
+        Args:
+            path: Path to save the topic modeler
+        """
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        state = {
             'method': self.method,
             'num_topics': self.num_topics,
             'random_state': self.random_state,
+            'topic_word_prior': self.topic_word_prior,
+            'doc_topic_prior_factor': self.doc_topic_prior_factor,
+            'feature_names': self.feature_names,
+            'topic_words': self.topic_words
         }
         
-        # Add feature_names to config, converting to list if it's a numpy array
-        if hasattr(self, 'feature_names'):
-            if isinstance(self.feature_names, np.ndarray):
-                config['feature_names'] = self.feature_names.tolist()
-            else:
-                config['feature_names'] = self.feature_names
+        # Save the state
+        with open(f"{path}_state.pkl", 'wb') as f:
+            pickle.dump(state, f)
         
-        with open(os.path.join(path, 'config.json'), 'w') as f:
-            json.dump(config, f)
+        # Save the model if available
+        if self.model is not None:
+            with open(f"{path}_model.pkl", 'wb') as f:
+                pickle.dump(self.model, f)
         
-        # Save topic words
-        if hasattr(self, 'topic_words') and self.topic_words is not None:
-            with open(os.path.join(path, 'topic_words.json'), 'w') as f:
-                serializable_topics = {str(k): v for k, v in self.topic_words.items()}
-                json.dump(serializable_topics, f)
-        
-        # Save the model
-        if self.method in ['lda', 'nmf']:
-            joblib.dump(self.model, os.path.join(path, f'{self.method}_model.pkl'))
-        elif self.method == 'bertopic':
-            if hasattr(self.model, 'save'):
-                self.model.save(os.path.join(path, 'bertopic_model'))
-        
-        logger.info(f"Topic model saved to {path}")
-    
+        logger.info(f"Topic modeler saved to {path}")
     @classmethod
     def load(cls, path: str) -> 'TopicModeler':
         """
-        Load a topic model from disk.
+        Load a topic modeler
         
         Args:
-            path: Directory path to load the model from
+            path: Path to load the topic modeler from
             
         Returns:
-            Loaded TopicModeler instance
+            TopicModeler: Loaded topic modeler
         """
-        import json
+        # Load state
+        with open(f"{path}_state.pkl", 'rb') as f:
+            state = pickle.load(f)
         
-        # Load model configuration
-        with open(os.path.join(path, 'config.json'), 'r') as f:
-            config = json.load(f)
-        
-        # Create an instance with the loaded configuration
+        # Create instance
         instance = cls(
-            method=config['method'],
-            num_topics=config['num_topics'],
-            random_state=config['random_state']
+            method=state['method'],
+            num_topics=state['num_topics'],
+            random_state=state['random_state'],
+            topic_word_prior=state.get('topic_word_prior', 0.01),
+            doc_topic_prior_factor=state.get('doc_topic_prior_factor', 50.0)
         )
         
-        instance.feature_names = config['feature_names']
+        # Restore state
+        instance.feature_names = state['feature_names']
+        instance.topic_words = state['topic_words']
         
-        # Load topic words
+        # Load model if available
         try:
-            with open(os.path.join(path, 'topic_words.json'), 'r') as f:
-                topic_words = json.load(f)
-                # Convert keys back to integers
-                instance.topic_words = {int(k): v for k, v in topic_words.items()}
+            with open(f"{path}_model.pkl", 'rb') as f:
+                instance.model = pickle.load(f)
         except FileNotFoundError:
-            instance.topic_words = None
+            logger.warning(f"Model file not found at {path}_model.pkl")
         
-        # Load the model
-        if config['method'] in ['lda', 'nmf']:
-            instance.model = joblib.load(os.path.join(path, f"{config['method']}_model.pkl"))
-            if hasattr(instance.model, 'components_'):
-                instance.topic_word_distributions = instance.model.components_
-        elif config['method'] == 'bertopic':
-            if BERTOPIC_AVAILABLE and os.path.exists(os.path.join(path, 'bertopic_model')):
-                from bertopic import BERTopic
-                instance.model = BERTopic.load(os.path.join(path, 'bertopic_model'))
-        
-        logger.info(f"Topic model loaded from {path}")
         return instance
+
+
+# # Standalone functions for backward compatibility
+
+# def create_document_term_matrix(texts, save_path=None):
+#     """
+#     Create a document-term matrix from cleaned texts.
+#     Wrapper around TopicModeler's method for backward compatibility.
     
-    def optimize_num_topics(self, document_term_matrix: Any, feature_names: List[str], 
-                            topic_range: range = range(2, 51, 4), 
-                            raw_documents: List[str] = None) -> Tuple[List[float], List[float], int]:
-        """
-        Find the optimal number of topics by evaluating coherence and perplexity.
+#     Args:
+#         texts: Cleaned text data
+#         save_path: Path to save the vectorizer
         
-        Args:
-            document_term_matrix: Document-term matrix for model fitting
-            feature_names: List of feature/vocabulary names
-            topic_range: Range of number of topics to try
-            raw_documents: Raw text documents for coherence calculation
-            
-        Returns:
-            coherence_values: List of coherence scores for each topic count
-            perplexity_values: List of perplexity scores for each topic count
-            optimal_num_topics: Optimal number of topics
-        """
-        logger.info(f"Optimizing number of topics in range {min(topic_range)}-{max(topic_range)}...")
-        coherence_values = []
-        perplexity_values = []
+#     Returns:
+#         tuple: (document-term matrix, vectorizer object, feature names)
+#     """
+#     modeler = TopicModeler()
+#     return modeler.create_document_term_matrix(texts, save_path)
+
+# def tune_lda_topics(dtm, vocab, sample_size=2000, save_results=True, output_dir=None):
+#     """
+#     Tune LDA model by testing a range of topic counts.
+#     Wrapper around TopicModeler's method for backward compatibility.
+    
+#     Args:
+#         dtm: Document-term matrix
+#         vocab: List of vocabulary terms
+#         sample_size: Number of documents to sample for tuning
+#         save_results: Whether to save the tuning results
+#         output_dir: Directory to save results
         
-        original_num_topics = self.num_topics
-        original_method = self.method
+#     Returns:
+#         dict: Records of coherence scores by topic count
+#     """
+#     modeler = TopicModeler()
+#     modeler.feature_names = vocab
+#     return modeler.optimize_num_topics(
+#         dtm, vocab, sample_size=sample_size, save_results=save_results, output_dir=output_dir
+#     )
+
+# def plot_topic_coherence(records, save_plot=True, output_dir=None):
+#     """
+#     Plot the topic coherence scores from LDA tuning.
+#     Wrapper around TopicModeler's method for backward compatibility.
+    
+#     Args:
+#         records: List of dictionaries with tuning results
+#         save_plot: Whether to save the plot
+#         output_dir: Directory to save the plot
         
-        # Only support LDA and NMF optimization for now
-        if self.method not in ['lda', 'nmf']:
-            logger.warning(f"Topic optimization not supported for method {self.method}. Using default.")
-            return [], [], self.num_topics
+#     Returns:
+#         tuple: (optimal topic count, plot)
+#     """
+#     modeler = TopicModeler()
+#     return modeler.plot_topic_coherence(records, save_plot=save_plot, output_dir=output_dir)
+
+# def fit_lda_model(dtm, n_topics=None, save_model=True, model_dir=None):
+#     """
+#     Fit the final LDA model with the optimal number of topics.
+#     Wrapper around TopicModeler's method for backward compatibility.
+    
+#     Args:
+#         dtm: Document-term matrix
+#         n_topics: Number of topics
+#         save_model: Whether to save the model
+#         model_dir: Directory to save the model
         
-        try:
-            for num_topics in topic_range:
-                logger.info(f"Evaluating model with {num_topics} topics...")
-                
-                # Update model parameters
-                self.num_topics = num_topics
-                
-                if self.method == 'lda':
-                    model = self._create_lda_model()
-                    model.fit(document_term_matrix)
-                    perplexity = model.perplexity(document_term_matrix)
-                    perplexity_values.append(perplexity)
-                    
-                    # Store components for coherence calculation
-                    self.model = model
-                    self.topic_word_distributions = model.components_
-                else:  # NMF
-                    model = self._create_nmf_model()
-                    model.fit(document_term_matrix)
-                    
-                    # NMF doesn't have perplexity, use reconstruction error instead
-                    error = model.reconstruction_err_
-                    perplexity_values.append(error)
-                    
-                    # Store components for coherence calculation
-                    self.model = model
-                    self.topic_word_distributions = model.components_
-                
-                # Extract topic words
-                self.feature_names = feature_names
-                self._extract_topic_words()
-                
-                # Compute coherence if raw documents are provided
-                if raw_documents is not None:
-                    coherence = self.compute_coherence_score(raw_documents)
-                    coherence_values.append(coherence)
-                
-                logger.info(f"Topics: {num_topics}, " + 
-                          f"{'Perplexity' if self.method == 'lda' else 'Error'}: {perplexity_values[-1]:.2f}" + 
-                          (f", Coherence: {coherence_values[-1]:.4f}" if raw_documents else ""))
-            
-            # Determine optimal number of topics
-            if raw_documents and coherence_values:
-                # Coherence is more important if we have it - higher is better
-                optimal_idx = coherence_values.index(max(coherence_values))
-                optimal_num_topics = topic_range[optimal_idx]
-            else:
-                # Lower perplexity/error is better
-                optimal_idx = perplexity_values.index(min(perplexity_values))
-                optimal_num_topics = topic_range[optimal_idx]
-            
-            # Set the model to use the optimal number of topics
-            self.num_topics = optimal_num_topics
-            
-            # Fit with optimal number
-            if self.method == 'lda':
-                self.model = self._create_lda_model().fit(document_term_matrix)
-                self.topic_word_distributions = self.model.components_
-            else:  # NMF
-                self.model = self._create_nmf_model().fit(document_term_matrix)
-                self.topic_word_distributions = self.model.components_
-            
-            # Update topic words with optimal model
-            self._extract_topic_words()
-            
-            logger.info(f"Optimal number of topics: {optimal_num_topics}")
-            return coherence_values, perplexity_values, optimal_num_topics
-            
-        except Exception as e:
-            logger.error(f"Error during topic optimization: {str(e)}")
-            
-            # Restore original settings
-            self.num_topics = original_num_topics
-            self.method = original_method
-            
-            # Fit with original settings to have a valid model
-            if self.method == 'lda':
-                self.model = self._create_lda_model().fit(document_term_matrix)
-                self.topic_word_distributions = self.model.components_
-            else:
-                self.model = self._create_nmf_model().fit(document_term_matrix)
-                self.topic_word_distributions = self.model.components_
-                
-            self.feature_names = feature_names
-            self._extract_topic_words()
-            
-            return [], [], self.num_topics
+#     Returns:
+#         tuple: (LDA model, topic distribution matrix)
+#     """
+#     modeler = TopicModeler(num_topics=n_topics if n_topics is not None else 40)
+#     return modeler.fit(dtm, save_model=save_model, model_dir=model_dir)
+
+# def get_top_words(lda_model, vocab, n_words=10, save_results=True, output_dir=None):
+#     """
+#     Get the top words for each topic in the LDA model.
+#     Wrapper around TopicModeler's method for backward compatibility.
+    
+#     Args:
+#         lda_model: Fitted LDA model
+#         vocab: Vocabulary list
+#         n_words: Number of top words to extract per topic
+#         save_results: Whether to save the results
+#         output_dir: Directory to save the results
+        
+#     Returns:
+#         dict: Dictionary mapping topic indices to lists of top words
+#     """
+#     modeler = TopicModeler()
+#     modeler.model = lda_model
+#     modeler.feature_names = vocab
+#     return modeler.get_top_words(n_words=n_words, save_results=save_results, output_dir=output_dir)

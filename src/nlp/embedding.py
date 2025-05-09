@@ -8,8 +8,13 @@ import pandas as pd
 import logging
 import os
 import joblib
+import sys
 from typing import List, Dict, Union, Optional, Tuple
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+
+# Import configuration values
+from ..config import (MAX_FEATURES, NGRAM_RANGE, MAX_DOC_FREQ, EMBEDDING_MODEL_PATH,
+                  MODEL_DIR, RANDOM_STATE)
 
 # Optional imports for more advanced embedding techniques
 try:
@@ -42,7 +47,6 @@ class EmbeddingProcessor:
         self.tokenizer = None
         self.embedding_dim = None
         self.vocab = None
-        
         logger.info(f"Initializing EmbeddingProcessor with method={method}")
         
         # Check if transformers are available when needed
@@ -50,29 +54,37 @@ class EmbeddingProcessor:
             logger.warning("Transformer method selected but libraries not available. "
                           "Install with: pip install transformers sentence-transformers")
             raise ImportError("Transformers library not available")
-    
-    def fit(self, texts: List[str], max_features: int = 10000, **kwargs) -> 'EmbeddingProcessor':
+            
+    def fit(self, texts: List[str], max_features: int = MAX_FEATURES, **kwargs) -> 'EmbeddingProcessor':
         """
         Fit the embedding model on the provided texts.
         
         Args:
             texts: List of text documents
-            max_features: Maximum vocabulary size for BoW/TF-IDF
+            max_features: Maximum vocabulary size for BoW/TF-IDF (default from config)
             **kwargs: Additional arguments for the vectorizer
             
         Returns:
             Self for method chaining
         """
         logger.info(f"Fitting {self.method} embedding model on {len(texts)} texts")
+          # Prepare common kwargs with config values if not already provided
+        common_kwargs = {
+            'max_features': max_features,
+            'ngram_range': NGRAM_RANGE,
+            'max_df': MAX_DOC_FREQ
+        }
+        # Update with any user-provided kwargs
+        common_kwargs.update(kwargs)
         
         if self.method == 'bow':
-            self.vectorizer = CountVectorizer(max_features=max_features, **kwargs)
+            self.vectorizer = CountVectorizer(**common_kwargs)
             self.vectorizer.fit(texts)
             self.vocab = self.vectorizer.get_feature_names_out()
             self.embedding_dim = len(self.vocab)
             
         elif self.method == 'tfidf':
-            self.vectorizer = TfidfVectorizer(max_features=max_features, **kwargs)
+            self.vectorizer = TfidfVectorizer(**common_kwargs)
             self.vectorizer.fit(texts)
             self.vocab = self.vectorizer.get_feature_names_out()
             self.embedding_dim = len(self.vocab)
@@ -156,14 +168,16 @@ class EmbeddingProcessor:
         """
         texts = df[text_col].fillna('').tolist()
         return self.transform(texts)
-    
-    def save(self, path: str) -> None:
+    def save(self, path: str = None) -> None:
         """
         Save the embedding model to disk.
         
         Args:
-            path: Directory path to save model
+            path: Directory path to save model. If None, uses EMBEDDING_MODEL_PATH from config
         """
+        if path is None:
+            path = EMBEDDING_MODEL_PATH
+            
         os.makedirs(path, exist_ok=True)
         
         # Save configuration
@@ -185,18 +199,20 @@ class EmbeddingProcessor:
                 f.write(self.model_name)
         
         logger.info(f"Model saved to {path}")
-    
     @classmethod
-    def load(cls, path: str) -> 'EmbeddingProcessor':
+    def load(cls, path: str = None) -> 'EmbeddingProcessor':
         """
         Load an embedding model from disk.
         
         Args:
-            path: Directory path to load model from
+            path: Directory path to load model from. If None, uses EMBEDDING_MODEL_PATH from config
             
         Returns:
             Loaded EmbeddingProcessor instance
         """
+        if path is None:
+            path = EMBEDDING_MODEL_PATH
+            
         config = joblib.load(os.path.join(path, 'config.joblib'))
         
         instance = cls(

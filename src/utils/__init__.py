@@ -8,12 +8,12 @@ from .utils import (
     setup_logging,
     plot_wordcloud,
     plot_feature_importance,
-    create_figure_base64
+    fig_to_base64
 )
 
 __all__ = [
     'setup_logging',
     'plot_wordcloud',
     'plot_feature_importance',
-    'create_figure_base64'
+    'fig_to_base64'
 ]

@@ -32,8 +32,7 @@ PROCESSED_DATA_DIR = os.path.join(DATA_DIR, 'processed')
 # Data split parameters
 TEST_SIZE = 0.2       # Percentage of data for test set
 VAL_SIZE = 0.15       # Percentage of data for validation set
-RANDOM_SEED = 42      # Random seed for reproducibility
-RANDOM_STATE = 42     # Alias for RANDOM_SEED (for backward compatibility)
+RANDOM_STATE = 42     
 CV_FOLDS = 5          # Number of cross-validation folds
 SAMPLE_SIZE = 5000    # Sample size for topic model tuning
 
@@ -69,3 +68,8 @@ N_ALPHAS = 50          # Number of alpha values to try in regularization path
 # Visualization
 MAX_WORD_CLOUD_WORDS = 100
 FIGURE_DPI = 300
+
+# Text processing parameters
+MIN_TOKEN_LENGTH = 3      # Minimum length for tokens to keep
+MIN_SENTENCE_TOKENS = 5   # Minimum number of tokens for a sentence to be valid
+MAX_FINANCIAL_NUM_RATIO = 0.4  # Maximum ratio of financial numbers in a sentence

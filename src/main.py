@@ -10,6 +10,14 @@ import argparse
 from datetime import datetime
 import subprocess
 
+from src.config import (DATA_DIR, MODEL_DIR, OUTPUT_DIR, RAW_DATA_PATH, PROCESSED_DATA_DIR,
+                  NUM_TOPICS, MAX_FEATURES, NGRAM_RANGE, RANDOM_STATE, TEST_SIZE, VAL_SIZE)
+from src.data.pipeline import DataPipeline
+from src.nlp.embedding import EmbeddingProcessor
+from src.nlp.sentiment import SentimentAnalyzer
+from src.nlp.topic_modeling import TopicModeler
+from src.nlp.feature_extraction import FeatureExtractor
+
 # Initialize logging
 logging.basicConfig(
     level=logging.INFO,
@@ -21,22 +29,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger('nlp_earnings_main')
 
-# Import pipeline components
-from data.pipeline import DataPipeline
-from nlp.embedding import EmbeddingProcessor
-from nlp.sentiment import SentimentAnalyzer
-from nlp.topic_modeling import TopicModeler
-from nlp.feature_extraction import FeatureExtractor
+
 
 def setup_directories():
     """Create necessary directories for output files."""
-    os.makedirs("models", exist_ok=True)
-    os.makedirs("models/embeddings", exist_ok=True)
-    os.makedirs("models/sentiment", exist_ok=True)
-    os.makedirs("models/topics", exist_ok=True)
-    os.makedirs("models/features", exist_ok=True)
-    os.makedirs("results", exist_ok=True)
-    os.makedirs("results/figures", exist_ok=True)
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    os.makedirs(os.path.join(MODEL_DIR, "embeddings"), exist_ok=True)
+    os.makedirs(os.path.join(MODEL_DIR, "sentiment"), exist_ok=True)
+    os.makedirs(os.path.join(MODEL_DIR, "topics"), exist_ok=True)
+    os.makedirs(os.path.join(MODEL_DIR, "features"), exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(os.path.join(OUTPUT_DIR, "figures"), exist_ok=True)
     logger.info("Created output directories")
 
 def run_data_pipeline(args):
@@ -44,24 +47,22 @@ def run_data_pipeline(args):
     logger.info("Starting data pipeline")
     
     try:
-        # Create and run pipeline
+        # Create and run pipeline with parameters matching DataPipeline constructor
         pipeline = DataPipeline(
-            input_file=args.input_file,
-            text_column=args.text_column,
-            output_dir=args.output_dir,
-            train_ratio=args.train_ratio,
-            val_ratio=args.val_ratio,
-            seed=args.seed
+            data_path=args.input_file,  # Changed from input_file to data_path
+            random_state=args.seed,     # Changed from seed to random_state 
+            test_size=1.0 - args.train_ratio - args.val_ratio,  # Calculate test_size
+            val_size=args.val_ratio    # val_size parameter
         )
-        
-        # Run pipeline stages
+          # Run pipeline stages
         pipeline.load_data()
         pipeline.clean_text()
         pipeline.compute_text_statistics()
         pipeline.process_financial_data()
         pipeline.generate_labels()
         pipeline.split_data()
-        version_id = pipeline.save_splits()
+        paths = pipeline.save_splits(output_dir=args.output_dir)  # Pass output_dir here
+        version_id = pipeline.data_version
         
         logger.info(f"Data pipeline completed successfully. Version: {version_id}")
         return version_id
@@ -74,12 +75,11 @@ def run_nlp_analysis(args, version_id=None):
     """Run the advanced NLP analysis."""
     logger.info("Starting NLP analysis")
     
-    try:
-        # Load the data
+    try:        # Load the data
         pipeline = DataPipeline()
         if version_id is None:
             # Get the latest version
-            from data.data_versioner import DataVersioner
+            from src.data.data_versioner import DataVersioner
             versioner = DataVersioner()
             version_id = versioner.get_latest_version()
             
@@ -97,11 +97,15 @@ def run_nlp_analysis(args, version_id=None):
         test_df = pd.read_csv(data_paths['test'])
         
         logger.info(f"Loaded {len(train_df)} training, {len(val_df)} validation, and {len(test_df)} test samples")
-        
-        # 1. Create and train embedding processor
+          # 1. Create and train embedding processor
         logger.info("Training embedding processor")
         embedding_processor = EmbeddingProcessor(method=args.embedding_method)
-        texts = train_df['processed_text'].fillna('').tolist()
+        
+        # Use 'clean_sent' or 'ea_text' column as available
+        text_column = 'clean_sent' if 'clean_sent' in train_df.columns else 'ea_text'
+        logger.info(f"Using '{text_column}' column for text data")
+        
+        texts = train_df[text_column].fillna('').tolist()
         embedding_processor.fit(texts, max_features=args.max_features)
         
         # Save the embedding processor
@@ -125,21 +129,21 @@ def run_nlp_analysis(args, version_id=None):
         
         # Save the topic model
         topic_modeler.save(f'models/topics/{args.topic_method}_model')
-        
-        # 4. Feature extraction and model training
+          # 4. Feature extraction and model training
         logger.info("Extracting features and training models")
-        feature_extractor = FeatureExtractor()
-        feature_extractor.set_embedding_processor(embedding_processor)
+        feature_extractor = FeatureExtractor(
+            use_topics=True,
+            use_sentiment=True,
+            use_metrics=True,
+            use_embeddings=True
+        )
+        feature_extractor.set_embedding_model(embedding_processor)
         feature_extractor.set_sentiment_analyzer(sentiment_analyzer)
-        feature_extractor.set_topic_modeler(topic_modeler)
-        
-        # Extract features from training data
+        feature_extractor.set_topic_model(topic_modeler)
+          # Extract features from training data
         X_train, feature_names = feature_extractor.extract_features(
             train_df, 
-            text_column='processed_text',
-            include_embeddings=True,
-            include_topics=True,
-            include_sentiment=True
+            text_column=text_column  # Use the identified text column
         )
         
         # Train regression model if target exists
@@ -149,12 +153,25 @@ def run_nlp_analysis(args, version_id=None):
             from sklearn.linear_model import Lasso
             lasso = Lasso(alpha=0.001, max_iter=10000)
             lasso.fit(X_train, y_reg_train)
-            
-            # Set feature importances
+              # Set feature importances
             feature_extractor.set_feature_importances(lasso.coef_, feature_names)
             
-            # Save feature extractor
-            feature_extractor.save('models/features/combined_features')
+            # Save feature extractor with error handling
+            try:
+                os.makedirs('models/features', exist_ok=True)
+                
+                # Try an alternative path if the first one fails
+                try:
+                    feature_extractor.save('models/features/combined_features')
+                except PermissionError:
+                    # Try with a timestamped filename to avoid conflicts
+                    import time
+                    timestamp = int(time.time())
+                    alt_path = f'models/features/combined_features_{timestamp}'
+                    logger.warning(f"Permission denied on original path, trying alternative: {alt_path}")
+                    feature_extractor.save(alt_path)
+            except Exception as e:
+                logger.warning(f"Failed to save feature extractor: {str(e)}")
             
             # Print top features
             logger.info("Top predictive features:")
@@ -169,6 +186,56 @@ def run_nlp_analysis(args, version_id=None):
         logger.error(f"Error in NLP analysis: {str(e)}")
         raise
 
+def run_full_pipeline(data_path=None, n_topics=None, force_reprocess=False, tune_topics=True):
+    """
+    Run the full analysis pipeline with specified parameters.
+    
+    Args:
+        data_path: Path to input data file
+        n_topics: Number of topics for topic modeling (None for auto-tuning)
+        force_reprocess: Whether to force data reprocessing
+        tune_topics: Whether to tune the number of topics automatically
+        
+    Returns:
+        bool: Success status
+    """
+    # Set up directories
+    setup_directories()
+    
+    # Define default parameters
+    input_file = data_path or RAW_DATA_PATH
+    num_topics = n_topics or NUM_TOPICS
+    
+    # Create a custom args object for data pipeline
+    data_args = type('Args', (), {
+        'input_file': input_file,
+        'output_dir': PROCESSED_DATA_DIR,
+        'force_reprocess': force_reprocess,
+        'train_ratio': 1.0 - TEST_SIZE - VAL_SIZE,
+        'val_ratio': VAL_SIZE / (1.0 - TEST_SIZE),  # Adjusted to match config's proportions
+        'text_column': 'sent'
+    })
+    
+    # Run data pipeline
+    version_id = run_data_pipeline(data_args)
+    
+    # Create a custom args object for NLP analysis
+    nlp_args = type('Args', (), {
+        'data_version': version_id,
+        'embedding_method': 'tfidf',
+        'max_features': 5000,
+        'sentiment_method': 'loughran_mcdonald',
+        'topic_method': 'lda',
+        'num_topics': num_topics,
+        'tune_topics': tune_topics,
+        'output_dir': 'results'
+    })
+    
+    # Run NLP analysis
+    success = run_nlp_analysis(nlp_args, version_id)
+    
+    return success
+
 def run_dashboard():
     """Launch the Streamlit dashboard."""
     logger.info("Launching Streamlit dashboard")
@@ -179,7 +246,7 @@ def run_dashboard():
                       check=True, stdout=subprocess.PIPE)
         
         # Launch the dashboard
-        dashboard_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "streamlit_app.py")
+        dashboard_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard/app.py")
         subprocess.Popen([sys.executable, "-m", "streamlit", "run", dashboard_path])
         
         logger.info(f"Dashboard launched: {dashboard_path}")

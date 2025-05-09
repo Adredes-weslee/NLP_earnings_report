@@ -329,8 +329,7 @@ class FeatureExtractor:
             for match in matches:
                 value_str = match.group(1)
                 try:
-                    value = float(value_str)
-                    # Convert billions to millions for consistency
+                    value = float(value_str)                    # Convert billions to millions for consistency
                     if 'billion' in name:
                         value = value * 1000
                     metrics[name] = value
@@ -338,7 +337,7 @@ class FeatureExtractor:
                     continue
         
         return metrics
-    
+        
     def extract_features(self, df: pd.DataFrame, text_column: str, 
                         include_embeddings: bool = True,
                         include_topics: bool = True,
@@ -359,6 +358,7 @@ class FeatureExtractor:
         logger.info(f"Extracting features from {len(df)} texts")
         features_list = []
         feature_names = []
+        all_features = pd.DataFrame()  # Initialize all_features as an empty DataFrame
         
         # Extract base features using the per-text method
         base_features_df = pd.DataFrame([self.extract_text_features(text) for text in df[text_column].fillna('')])
@@ -647,8 +647,7 @@ class FeatureExtractor:
             'entities': [],
             'topics': []
         }
-        
-        # Add topic features if available
+          # Add topic features if available
         if hasattr(self, 'topic_modeler') and hasattr(self.topic_modeler, 'num_topics'):
             feature_groups['topics'] = [f'topic_{i}' for i in range(self.topic_modeler.num_topics)]
         
@@ -659,11 +658,37 @@ class FeatureExtractor:
                 feature_groups['entities'] = entity_features
                 
         return feature_groups
-
-    def extract_features(self, df, text_column, include_embeddings=True, include_topics=True, include_sentiment=True):
-        # Your existing implementation for extract_features...
         
-        # Add this before returning the feature matrix:
+    def extract_features(self, df, text_column, include_embeddings=True, include_topics=True, include_sentiment=True):
+        """
+        Extract features from a dataframe with text data.
+        This is a simplified version for backward compatibility.
+        
+        Args:
+            df: DataFrame containing text data
+            text_column: Name of column containing text
+            include_embeddings: Whether to include embedding features
+            include_topics: Whether to include topic features
+            include_sentiment: Whether to include sentiment features
+            
+        Returns:
+            Tuple of (feature_matrix, feature_names)
+        """
+        logger.info(f"Extracting features from {len(df)} texts")
+        features_list = []
+        feature_names = []
+        all_features = pd.DataFrame()  # Initialize all_features as an empty DataFrame
+        
+        # Extract base features using the per-text method
+        base_features_df = pd.DataFrame([self.extract_text_features(text) for text in df[text_column].fillna('')])
+        if not base_features_df.empty:
+            features_list.append(base_features_df)
+            feature_names.extend(base_features_df.columns.tolist())
+        
+        # Combine all features if we have any
+        if features_list:
+            all_features = pd.concat(features_list, axis=1)
+        
         # Convert all features to numeric type, handling non-numeric values
         for col in all_features.columns:
             if all_features[col].dtype == 'object':  # If column contains string/object data

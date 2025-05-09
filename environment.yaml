@@ -5,13 +5,13 @@ channels:
   - pytorch
 dependencies:
   - python=3.11.0  
-  - numpy=1.26.4
+  - numpy=1.23.5
   - pandas=2.2.3
   - scikit-learn=1.6.1
   - matplotlib=3.10.0
   - nltk=3.9.1
-  - scipy=1.6.1
-  - gensim=4.3.3
+  - scipy=1.15.2
+  - gensim=4.3.2
   - streamlit=1.45.0
   - plotly=6.0.1
   - wordcloud=1.9.4
@@ -19,11 +19,11 @@ dependencies:
   - transformers=4.49.0
   - altair=5.5.0
   - watchdog=4.0.2
-  - umap-learn=0.5.3
-  - pip
+  - umap-learn=0.5.4
+  - seaborn=0.13.2
+  - pip=25.1
   - pip:
-    - tmtoolkit==0.12.0    
+    - tmtoolkit==0.12.0  
     - sentence-transformers==4.1.0
     - bertopic==0.17.0
     - hdbscan==0.8.40
-    - seaborn==0.13.2

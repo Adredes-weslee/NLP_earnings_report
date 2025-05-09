@@ -660,6 +660,30 @@ class FeatureExtractor:
                 
         return feature_groups
 
+    def extract_features(self, df, text_column, include_embeddings=True, include_topics=True, include_sentiment=True):
+        # Your existing implementation for extract_features...
+        
+        # Add this before returning the feature matrix:
+        # Convert all features to numeric type, handling non-numeric values
+        for col in all_features.columns:
+            if all_features[col].dtype == 'object':  # If column contains string/object data
+                # Remove non-numeric columns or convert them to numeric
+                try:
+                    all_features[col] = pd.to_numeric(all_features[col], errors='coerce')
+                except:
+                    logger.warning(f"Dropping non-numeric column: {col}")
+                    all_features = all_features.drop(columns=[col])
+        
+        # Drop any rows with NaN values that may have been introduced
+        all_features = all_features.fillna(0)
+        
+        # Update feature names after potential column removal
+        feature_names = all_features.columns.tolist()
+        
+        logger.info(f"Extracted {all_features.shape[1]} features")
+        return all_features.values, feature_names
+     
+
     def save(self, path: str) -> None:
         """
         Save the feature extractor.

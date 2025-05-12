@@ -2,6 +2,8 @@
 
 This script provides a lightweight version of the NLP testing suite that can
 run on a reduced dataset size for faster debugging and development iterations.
+It follows the comprehensive Google-style documentation standards established
+throughout the codebase.
 It tests all key NLP components including:
 
 - Embedding generation with TF-IDF vectorization

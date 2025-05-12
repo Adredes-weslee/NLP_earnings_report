@@ -1,6 +1,6 @@
 # Quick NLP Test for Earnings Report Analysis
 
-This guide explains how to run quick tests on the NLP earnings report analysis with a reduced dataset size, allowing for rapid testing and debugging.The test scripts follow the same comprehensive Google-style documentation standards as the main codebase to ensure consistency and clarity.
+This guide explains how to run quick tests on the NLP earnings report analysis with a reduced dataset size, allowing for rapid testing and debugging. The test scripts follow the same comprehensive Google-style documentation standards as the main codebase to ensure consistency and clarity.
 
 ## Running Quick Tests
 

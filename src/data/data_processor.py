@@ -42,14 +42,22 @@ MAX_FINANCIAL_NUM_RATIO = 0.5
 MIN_SENTENCE_TOKENS = 5
 
 def load_data(file_path=None):
-    """
-    Load earnings announcement data from the specified file
+    """Load earnings announcement data from the specified file.
+    
+    This function loads the earnings report dataset from a CSV file,
+    typically in gzip format.
     
     Args:
-        file_path (str, optional): Path to the data file. If None, uses the path from config.
+        file_path (str, optional): Path to the data file. If None, uses the 
+            path from config.
     
     Returns:
-        pandas.DataFrame: The loaded dataset
+        pandas.DataFrame: The loaded dataset containing earnings reports and
+            associated financial data.
+    
+    Raises:
+        FileNotFoundError: If the specified file doesn't exist.
+        pd.errors.ParserError: If there's a problem parsing the CSV file.
     """
     if file_path is None:
         # Use the data path from config
@@ -60,10 +68,9 @@ def load_data(file_path=None):
     return df
 
 def clean_sentences(txt):
-    """
-    Clean and filter sentences from the earnings announcement text.
+    """Clean and filter sentences from the earnings announcement text.
     
-    This function:
+    This function performs several preprocessing steps to clean financial text:
       - Replaces financial numbers with the token "financial_number"
       - Tokenizes the text into sentences, then words
       - Keeps only tokens that are either 'financial_number' or words with all letters
@@ -73,10 +80,16 @@ def clean_sentences(txt):
       - Returns the cleaned sentences reassembled as one string
     
     Args:
-        txt (str): Raw text from an earnings announcement
+        txt (str): Raw text from an earnings announcement.
         
     Returns:
-        str: Cleaned and filtered text
+        str: Cleaned and filtered text suitable for NLP analysis.
+        
+    Example:
+        >>> raw_text = "Revenue increased to $1.2 billion. Profit margin was 12.5%."
+        >>> clean_text = clean_sentences(raw_text)
+        >>> print(clean_text)
+        'revenue increased financial_number profit margin financial_number'
     """
     if not isinstance(txt, str):
         return ""
@@ -103,16 +116,25 @@ def clean_sentences(txt):
     return " ".join(good_sents)
 
 def process_data(df, text_column='ea_text', save_path=None):
-    """
-    Process the raw dataframe by cleaning the text in the specified column
+    """Process the dataframe by cleaning text in the specified column.
+    
+    This function applies the clean_sentences function to the text column
+    of the dataframe, creating a new 'clean_sent' column with the processed text.
+    It optionally saves the processed dataframe to a file.
     
     Args:
-        df (pandas.DataFrame): DataFrame containing earnings announcement data
-        text_column (str): Name of the column containing the text to clean
-        save_path (str, optional): Path to save the processed DataFrame
+        df (pandas.DataFrame): DataFrame containing earnings announcement data.
+        text_column (str): Name of the column containing the text to clean.
+            Defaults to 'ea_text'.
+        save_path (str, optional): Path to save the processed DataFrame.
+            If None, the dataframe is not saved.
         
     Returns:
-        pandas.DataFrame: DataFrame with cleaned text in a new 'clean_sent' column
+        pandas.DataFrame: DataFrame with cleaned text in a new 'clean_sent' column.
+        
+    Example:
+        >>> df = load_data()
+        >>> processed_df = process_data(df, save_path='cleaned_data.csv.gz')
     """
     print("Cleaning sentences in earnings announcements...")
     df['clean_sent'] = df[text_column].apply(clean_sentences)
@@ -124,15 +146,37 @@ def process_data(df, text_column='ea_text', save_path=None):
     return df
 
 def compute_text_statistics(df, text_column='clean_sent'):
-    """
-    Compute basic statistics about the texts in the dataset
+    """Compute basic statistics about the texts in the dataset.
+    
+    Calculates several statistical measures about the text data, including length
+    distributions and document counts. This is useful for understanding the dataset
+    characteristics and identifying potential data quality issues.
     
     Args:
-        df (pandas.DataFrame): DataFrame containing text data
-        text_column (str): Name of the column containing the text
+        df (pandas.DataFrame): DataFrame containing text data. The function will 
+            add a temporary 'text_length' column to this DataFrame.
+        text_column (str, optional): Name of the column containing the text to analyze.
+            Defaults to 'clean_sent'.
         
     Returns:
-        dict: Dictionary with text statistics
+        dict: Dictionary with text statistics including:
+            - mean_length: Average word count per document
+            - median_length: Median word count across documents
+            - min_length: Word count of shortest document
+            - max_length: Word count of longest document
+            - std_length: Standard deviation of word counts
+            - total_documents: Total number of documents in the dataset
+            - empty_documents: Number of empty or non-string documents
+    
+    Examples:
+        >>> df = pd.DataFrame({'clean_sent': ['This is a test', 'Another longer example', '']})
+        >>> stats = compute_text_statistics(df)
+        >>> print(f"Average document length: {stats['mean_length']:.1f} words")
+        >>> print(f"Empty documents: {stats['empty_documents']}")
+    
+    Notes:
+        The function temporarily adds a 'text_length' column to the input DataFrame
+        but does not remove it after processing.
     """
     # Calculate text lengths
     df['text_length'] = df[text_column].apply(lambda x: len(x.split()) if isinstance(x, str) else 0)

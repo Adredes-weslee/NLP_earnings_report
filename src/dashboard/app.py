@@ -1,5 +1,19 @@
-"""
-Streamlit dashboard application for NLP earnings report analysis.
+"""Streamlit dashboard application for NLP earnings report analysis.
+
+This module implements an interactive dashboard for analyzing earnings reports
+using Natural Language Processing techniques. The dashboard provides visualizations
+for topic modeling, sentiment analysis, and financial metrics extracted from
+earnings announcements.
+
+The application allows users to:
+- Load and explore earnings report datasets
+- Visualize topic distributions and top words
+- Analyze sentiment trends across companies and sectors
+- Compare financial metrics with NLP-derived insights
+- Generate custom reports and visualizations
+
+Usage:
+    Run the dashboard with: `streamlit run src/dashboard/app.py`
 """
 
 import os
@@ -85,12 +99,62 @@ except ImportError:
     from src.nlp.feature_extraction import FeatureExtractor
 
 class EarningsReportDashboard:
-    """
-    Interactive dashboard for NLP earnings report analysis.
+    """Interactive dashboard for NLP earnings report analysis.
+    
+    This class represents the main dashboard interface for analyzing earnings reports
+    using various NLP techniques. It provides functionality for text analysis, dataset exploration,
+    model management, topic exploration, prediction simulation, and performance analytics.
+    
+    The dashboard integrates multiple NLP components including sentiment analysis,
+    topic modeling, feature extraction, and embedding models to provide comprehensive
+    analysis of financial text data. It offers interactive visualizations, exploration tools,
+    and model evaluation capabilities for financial text analysis.
+    
+    The class implements a modular design with separate pages for different analysis tasks,
+    allowing users to navigate between text analysis, dataset exploration, model evaluation,
+    and other specialized views. It automatically adapts its interface based on which
+    models and data are available.
+    
+    Attributes:
+        title (str): The title displayed in the dashboard.
+        models (dict): Dictionary of loaded NLP models including sentiment analyzers,
+            topic models, feature extractors, and embedding models.
+        sample_data (pandas.DataFrame): Sample dataset for analysis and demonstrations,
+            containing earnings report text and associated metadata.
+        available_models (dict): Information about all available models organized by type,
+            with metadata about each model including name, version, and description.
+        prediction_simulator (dict): Configuration for prediction simulation including
+            model availability and prediction functions for different analysis tasks.
+        topic_explorer (dict): Configuration for topic exploration including topic data,
+            visualization capabilities, and interactive exploration functions.
+            
+    Example:
+        >>> dashboard = EarningsReportDashboard()
+        >>> dashboard.initialize()
+        >>> dashboard.run()
     """
     
     def __init__(self):
-        """Initialize the dashboard."""
+        """Initialize the earnings report analysis dashboard with default settings.
+        
+        Sets up the dashboard with initial empty state and configures the Streamlit
+        page settings. This constructor initializes class attributes with default
+        values but does not load models or data - that happens in the initialize()
+        method which should be called separately.
+        
+        The constructor configures the Streamlit page layout, title, and sidebar
+        state for optimal dashboard presentation.
+        
+        Args:
+            None
+            
+        Returns:
+            None
+            
+        Note:
+            After instantiation, call initialize() to load models and data
+            before calling run() to start the dashboard.
+        """
         self.title = "NLP Earnings Report Analysis Dashboard"
         self.models = {}
         self.sample_data = None
@@ -107,7 +171,24 @@ class EarningsReportDashboard:
         )
         
     def initialize(self):
-        """Initialize dashboard components and load models."""
+        """Initialize dashboard components and load models.
+        
+        This method performs the following initialization steps:
+        1. Loads all available NLP models (sentiment, topic, embedding)
+        2. Loads sample data for demonstration if available
+        3. Sets up the dashboard components and interface
+        4. Prepares the topic explorer and prediction simulator
+        
+        The method uses st.spinner to indicate loading progress to the user.
+        If any errors occur during initialization, they are caught and
+        displayed as error messages in the dashboard.
+        
+        Returns:
+            None
+        
+        Note:
+            This should be called once at dashboard startup.
+        """
         try:
             # Load models and data
             with st.spinner("Loading models and data..."):
@@ -134,11 +215,27 @@ class EarningsReportDashboard:
                 st.warning("⚠️ No pre-trained models could be loaded. Some features may be unavailable.")
         
         except Exception as e:
-            logger.error(f"Error initializing dashboard: {str(e)}")
+            logger.error(f"Error initializing dashboard: {str(e)}")            
             st.error(f"An error occurred during initialization: {str(e)}")
     
     def render_header(self):
-        """Render the dashboard header."""
+        """Render the dashboard header with title and introduction.
+        
+        Displays the main title of the dashboard and an introductory text that
+        explains the purpose and functionality of the application to users.
+        The header provides context about what the dashboard offers and how
+        users can interact with it.
+        
+        Args:
+            None
+            
+        Returns:
+            None: The header is rendered directly to the Streamlit UI.
+            
+        Note:
+            This method should be called at the beginning of each page render
+            to maintain consistent UI across different dashboard views.
+        """
         st.title(self.title)
         st.markdown("""
         This interactive dashboard allows you to explore and analyze earnings reports using 
@@ -147,7 +244,31 @@ class EarningsReportDashboard:
         """)
         
     def render_sidebar(self):
-        """Render the sidebar with options."""
+        """Render the dashboard sidebar with navigation and options.
+        
+        Creates and populates the sidebar with navigation controls, model information,
+        sample data details, and data upload functionality. The sidebar serves as the
+        main navigation hub for the dashboard and provides context about available
+        resources (models and data).
+        
+        The method:
+        1. Creates a navigation radio selector
+        2. Displays information about loaded models
+        3. Shows details about available sample data
+        4. Provides a file uploader for custom data
+        
+        Args:
+            None
+            
+        Returns:
+            Tuple[str, Optional[pd.DataFrame]]: A tuple containing:
+                - Selected page name as a string
+                - Uploaded data as DataFrame if a file was uploaded, otherwise None
+                
+        Note:
+            This method should be called at the beginning of the dashboard flow
+            to set up navigation and process any uploaded data.
+        """
         st.sidebar.title("Options")
         
         # Navigation
@@ -184,7 +305,29 @@ class EarningsReportDashboard:
         return page, None
     
     def render_text_analysis(self):
-        """Render the text analysis page."""
+        """Render the text analysis page with input area and options.
+        
+        Creates the text analysis interface that allows users to input or select
+        earnings report text and analyze it using various NLP techniques. The page
+        provides text input controls, sample text selection, analysis options,
+        and displays results in interactive visualizations.
+        
+        The method:
+        1. Creates a text input area for earnings report content
+        2. Provides sample text selection if sample data is available
+        3. Offers configurable analysis options (sentiment, topics, features)
+        4. Processes the text and displays results when requested
+        
+        Args:
+            None
+            
+        Returns:
+            None: The text analysis page is rendered directly to the Streamlit UI.
+            
+        Note:
+            This method relies on the _analyze_text helper method to perform
+            the actual analysis and visualization once text is provided.
+        """
         st.header("Text Analysis")
         
         col1, col2 = st.columns([3, 1])
@@ -228,9 +371,30 @@ class EarningsReportDashboard:
                 # Analysis results container
                 with st.spinner("Analyzing text..."):
                     self._analyze_text(text, run_sentiment, run_topics, run_features)
-    
     def _analyze_text(self, text, run_sentiment=True, run_topics=True, run_features=True):
-        """Perform text analysis and display results."""
+        """Perform text analysis and display results.
+        
+        This method analyzes the provided text using various NLP techniques including
+        sentiment analysis, topic modeling, and feature extraction. Results are
+        displayed as interactive visualizations in the Streamlit dashboard.
+        
+        Args:
+            text (str): The earnings report text to analyze.
+            run_sentiment (bool): Whether to perform sentiment analysis.
+                Defaults to True.
+            run_topics (bool): Whether to perform topic modeling.
+                Defaults to True.
+            run_features (bool): Whether to perform feature extraction.
+                Defaults to True.
+                
+        Returns:
+            None: Results are displayed directly in the Streamlit dashboard.
+            
+        Note:
+            This method requires models to be loaded in self.models dictionary.
+            At minimum, it needs 'sentiment' and 'topic' models for the respective
+            analyses to be performed.
+        """
         st.subheader("Analysis Results")
         
         # Sentiment Analysis
@@ -321,9 +485,32 @@ class EarningsReportDashboard:
                     
             except Exception as e:
                 st.error(f"Error in feature extraction: {str(e)}")
-    
+                
     def render_dataset_analysis(self):
-        """Render the dataset analysis page."""
+        """Render the dataset analysis page with data exploration features.
+        
+        Creates an interactive data exploration interface that displays dataset
+        statistics, visualizations, and analysis tools. The page allows users to
+        explore the structure and content of earnings report datasets, including
+        text features and numerical metrics.
+        
+        The method:
+        1. Displays dataset overview metrics (records, columns, dates)
+        2. Shows a sample of the dataset in a data table
+        3. Provides text column analysis with word counts and distributions
+        4. Offers target variable analysis for numeric columns if available
+        
+        Args:
+            None
+            
+        Returns:
+            None: The dataset analysis page is rendered directly to the Streamlit UI.
+            
+        Note:
+            This method requires either sample_data to be loaded or data to be
+            uploaded through the sidebar uploader. If no dataset is available,
+            a warning message is displayed instead.
+        """
         st.header("Dataset Analysis")
         
         dataset = None
@@ -398,9 +585,32 @@ class EarningsReportDashboard:
                         st.plotly_chart(fig, use_container_width=True)
                     except Exception as e:
                         st.error(f"Error analyzing target variable: {str(e)}")
-    
+                        
     def render_model_zoo(self):
-        """Render the model zoo page showing available pre-trained models."""
+        """Render the model zoo page showcasing available pre-trained models.
+        
+        Creates an interactive catalog of available pre-trained models for financial
+        text analysis, organized by type (sentiment, topic, feature extraction).
+        The page allows users to explore model descriptions, performance metrics,
+        and try out models with sample inputs.
+        
+        The method:
+        1. Creates tabbed sections for different model categories
+        2. Displays model information including descriptions and metrics
+        3. Provides interactive demo functionality for each model
+        4. Shows comparisons between different models in the same category
+        
+        Args:
+            None
+            
+        Returns:
+            None: The model zoo page is rendered directly to the Streamlit UI.
+            
+        Note:
+            This method uses the available_models dictionary to populate the
+            model information. The actual models available may vary depending
+            on what was successfully loaded during initialization.
+        """
         st.header("Model Zoo")
         
         st.markdown("""
@@ -607,7 +817,30 @@ class EarningsReportDashboard:
                     st.info("Note: This is a demo. Custom model integration requires additional setup.")
     
     def render_topic_explorer(self):
-        """Render the interactive topic explorer."""
+        """Render the interactive topic explorer for analyzing document themes.
+        
+        Creates an interactive interface for exploring and visualizing topics
+        extracted from financial text corpus. Users can select specific topics
+        to see key words, distribution charts, and related documents, as well
+        as explore intertopic relationships.
+        
+        The method:
+        1. Displays an overview of all detected topics with prevalence metrics
+        2. Allows selection of individual topics for detailed exploration
+        3. Shows key words and word clouds for selected topics
+        4. Provides interactive visualizations showing topic relationships
+        
+        Args:
+            None
+            
+        Returns:
+            None: The topic explorer page is rendered directly to the Streamlit UI.
+            
+        Note:
+            This method requires a topic model to be loaded and accessible through
+            the topic_explorer object. If no topic model is available, a warning
+            message is displayed instead.
+        """
         st.header("🔍 Topic Explorer")
         
         # Check if topic model is available
@@ -671,9 +904,32 @@ class EarningsReportDashboard:
             st.components.v1.html(visualization_html, height=600)
         else:
             st.info("Interactive visualization not available for this topic model.")
-    
+            
     def render_prediction_simulator(self):
-        """Render the prediction simulator page for earnings text analysis."""
+        """Render the prediction simulator for analyzing potential financial outcomes.
+        
+        Creates an interactive simulator that allows users to input earnings report text
+        and receive predictions about potential financial outcomes, including stock
+        movement, sentiment trends, and key financial metrics. The simulator applies
+        multiple models to provide a comprehensive analysis.
+        
+        The method:
+        1. Provides sample text options and a text input area
+        2. Applies sentiment, topic, and feature extraction models to the input
+        3. Presents predictions with confidence scores and explanations
+        4. Offers adjustable parameters for sensitivity analysis
+        
+        Args:
+            None
+            
+        Returns:
+            None: The prediction simulator page is rendered directly to the Streamlit UI.
+            
+        Note:
+            This method relies on multiple models being available in self.models
+            dictionary. It will adapt the available predictions based on which
+            models are successfully loaded.
+        """
         st.header("Earnings Report Prediction Simulator")
         
         st.markdown("""
@@ -1163,9 +1419,31 @@ class EarningsReportDashboard:
                         """)
                     else:
                         st.info("Stock movement prediction was not selected.")
-    
+                        
     def render_model_performance(self):
-        """Render the model performance page."""
+        """Render the model performance page with metrics and evaluations.
+        
+        Creates a comprehensive display of performance metrics, evaluations, and
+        comparative analyses for the loaded NLP models. The page provides insights
+        into each model's accuracy, efficiency, and limitations.
+        
+        The method:
+        1. Offers selection controls for different model types
+        2. Delegates to specialized rendering methods for each model type
+        3. Displays appropriate metrics based on the model's purpose
+        4. Provides visualizations of key performance indicators
+        
+        Args:
+            None
+            
+        Returns:
+            None: The model performance page is rendered directly to the Streamlit UI.
+            
+        Note:
+            This method serves as a router to more specific performance visualization
+            methods based on the selected model type. It requires models to be loaded
+            in the self.models dictionary.
+        """
         st.header("Model Performance")
         
         # Select model for performance analysis
@@ -1184,9 +1462,31 @@ class EarningsReportDashboard:
             self._render_feature_extractor_performance()
         else:
             st.write(f"Performance visualization not implemented for {selected_model} model.")
-    
+            
     def _render_topic_model_performance(self):
-        """Render topic model performance metrics."""
+        """Render topic model performance metrics and evaluation.
+        
+        Displays performance metrics specific to topic models, including coherence
+        scores, topic quality metrics, and topic distribution visualizations.
+        This method is called by render_model_performance when a topic model
+        is selected.
+        
+        The method:
+        1. Displays coherence and quality metrics for the topic model
+        2. Shows topic distributions across the corpus
+        3. Visualizes topic-word relevance
+        4. Provides diagnostic information about model fit
+        
+        Args:
+            None
+            
+        Returns:
+            None: Topic model performance metrics are rendered directly to the Streamlit UI.
+            
+        Note:
+            This method requires a topic model to be loaded and available in
+            the self.models dictionary under the 'topic' key.
+        """
         if 'topic' not in self.models:
             st.warning("Topic model not available.")
             return
@@ -1238,9 +1538,31 @@ class EarningsReportDashboard:
                     title=f"Top Words for Topic {topic_id}"
                 )
                 st.plotly_chart(fig, use_container_width=True)
-    
+                
     def _render_sentiment_model_performance(self):
-        """Render sentiment model performance metrics."""
+        """Render sentiment model performance metrics and evaluation.
+        
+        Displays performance metrics specific to sentiment analysis models,
+        including accuracy, precision, recall, and F1 scores across different
+        sentiment classes. This method is called by render_model_performance
+        when a sentiment model is selected.
+        
+        The method:
+        1. Displays sentiment classification metrics and benchmarks
+        2. Shows confusion matrices for sentiment predictions
+        3. Allows interactive testing of the model with custom text
+        4. Provides comparisons to baseline models
+        
+        Args:
+            None
+            
+        Returns:
+            None: Sentiment model performance metrics are rendered directly to the Streamlit UI.
+            
+        Note:
+            This method requires a sentiment model to be loaded and available
+            in the self.models dictionary under the 'sentiment' key.
+        """
         if 'sentiment' not in self.models:
             st.warning("Sentiment model not available.")
             return
@@ -1280,9 +1602,31 @@ class EarningsReportDashboard:
                 
                 # Also display as table
                 st.dataframe(result_df)
-    
+                
     def _render_feature_extractor_performance(self):
-        """Render feature extractor performance."""
+        """Render feature extractor performance metrics and evaluation.
+        
+        Displays performance metrics specific to feature extraction models,
+        including extraction accuracy, feature importance, and extraction
+        examples. This method is called by render_model_performance when
+        a feature extractor model is selected.
+        
+        The method:
+        1. Displays feature importance visualizations
+        2. Shows extraction precision and recall metrics
+        3. Allows interactive testing of the extractor with custom text
+        4. Demonstrates extraction capabilities with real examples
+        
+        Args:
+            None
+            
+        Returns:
+            None: Feature extractor performance metrics are rendered directly to the Streamlit UI.
+            
+        Note:
+            This method requires a feature extractor model to be loaded and available
+            in the self.models dictionary under the 'feature_extractor' key.
+        """
         if 'feature_extractor' not in self.models:
             st.warning("Feature extractor not available.")
             return
@@ -1320,9 +1664,31 @@ class EarningsReportDashboard:
                 st.dataframe(features)
             else:
                 st.write("Features extracted but format not recognized")
-    
+                
     def render_about(self):
-        """Render the about page."""
+        """Render the about page with dashboard information and documentation.
+        
+        Creates an informational page that explains the purpose, features,
+        and technical details of the earnings report analysis dashboard.
+        The page serves as documentation for users to understand the
+        dashboard's capabilities and implementation.
+        
+        The method:
+        1. Displays overview information about the dashboard
+        2. Lists key features and their descriptions
+        3. Provides technical information about models and data sources
+        4. Shows acknowledgments and references
+        
+        Args:
+            None
+            
+        Returns:
+            None: The about page is rendered directly to the Streamlit UI.
+            
+        Note:
+            This method does not rely on any models or data, and will always
+            render completely regardless of the application's state.
+        """
         st.header("About This Dashboard")
         
         st.markdown("""
@@ -1362,9 +1728,30 @@ class EarningsReportDashboard:
         These methods enable comprehensive analysis of earnings reports text to extract insights
         and patterns that may correlate with financial performance.
         """)
-    
+        
     def render_home(self):
-        """Render the home page."""
+        """Render the home page with dashboard overview and quick access links.
+        
+        Creates the landing page of the dashboard, providing an overview of available
+        features, quick access links to key functionality, and introductory information
+        for new users. This page serves as the entry point to the dashboard.
+        
+        The method:
+        1. Displays welcome message and dashboard introduction
+        2. Shows key features with visual indicators
+        3. Provides quick access buttons to main sections
+        4. Shows sample insights and capabilities
+        
+        Args:
+            None
+            
+        Returns:
+            None: The home page is rendered directly to the Streamlit UI.
+            
+        Note:
+            This method is typically called when the dashboard first loads or when
+            the user navigates to the Home page from the sidebar navigation.
+        """
         st.header("Welcome to the NLP Earnings Report Dashboard")
         
         # Quick overview
@@ -1404,11 +1791,35 @@ class EarningsReportDashboard:
             st.subheader("Prediction Simulator")
             st.markdown("Simulate predictions on custom earnings report text.")
             if st.button("Go to Prediction Simulator"):
-                st.session_state.page = "Prediction Simulator"
+                st.session_state.page = "Prediction Simulator"                
                 st.experimental_rerun()
     
     def run(self):
-        """Run the dashboard application."""
+        """Run the dashboard application and handle navigation between pages.
+        
+        The main entry point for the dashboard application that orchestrates the
+        initialization, rendering, and page navigation flow. This method handles
+        the overall application lifecycle, including model loading, UI rendering,
+        navigation between different pages, and error handling.
+        
+        The method:
+        1. Initializes models and loads sample data
+        2. Renders the header and sidebar components
+        3. Processes any uploaded data files
+        4. Routes to the appropriate page based on navigation selection
+        5. Handles exceptions with user-friendly error messages
+        
+        Args:
+            None
+            
+        Returns:
+            None: The dashboard is rendered directly to the Streamlit UI.
+            
+        Note:
+            This method is the main driver of the application and calls the various
+            render_* methods based on user navigation. It also wraps the entire
+            dashboard operation in a try-except block to gracefully handle errors.
+        """
         try:
             # Initialize models and data
             self.initialize()
@@ -1447,7 +1858,29 @@ class EarningsReportDashboard:
 
 
 def main():
-    """Run the dashboard application."""
+    """Run the dashboard application as the entry point script.
+    
+    This function serves as the main entry point for the dashboard application
+    when the script is run directly. It creates an instance of the
+    EarningsReportDashboard class and calls its run method to start the
+    interactive Streamlit dashboard.
+    
+    The function:
+    1. Instantiates the EarningsReportDashboard class
+    2. Calls the run method to start the dashboard application
+    3. Handles the application lifecycle from initialization to termination
+    
+    Args:
+        None
+        
+    Returns:
+        None: The function executes the dashboard but does not return a value
+        
+    Note:
+        This function is executed when the script is run directly through
+        `streamlit run src/dashboard/app.py` command. It is not called when
+        the module is imported elsewhere.
+    """
     dashboard = EarningsReportDashboard()
     dashboard.run()
 

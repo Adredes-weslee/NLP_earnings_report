@@ -1,6 +1,24 @@
-"""
-Main entry point for the Enhanced NLP Earnings Report Analysis.
-This script provides the main command-line interface for running the pipeline.
+"""Main entry point for the Enhanced NLP Earnings Report Analysis.
+
+This script provides the main command-line interface for running the complete
+analysis pipeline. It coordinates the execution of data processing, feature
+extraction, model training, and evaluation components.
+
+The pipeline includes the following main components:
+- Data loading and preprocessing
+- Text embedding using various techniques
+- Topic modeling of earnings reports
+- Sentiment analysis
+- Feature extraction
+- Model training and evaluation
+
+Usage:
+    python -m src.main --mode full --data_path path/to/data.csv.gz
+
+Options:
+    --mode: Operation mode (full, preprocess, embed, topic, sentiment, features, evaluate)
+    --data_path: Path to the input data file
+    --output_dir: Directory for output files
 """
 
 import os
@@ -32,7 +50,23 @@ logger = logging.getLogger('nlp_earnings_main')
 
 
 def setup_directories():
-    """Create necessary directories for output files."""
+    """Create necessary directories for output files.
+    
+    This function ensures that all required directories for storing
+    models, features, and results exist before running the pipeline.
+    It creates the following directory structure if not already present:
+    
+    - MODEL_DIR/
+      - embeddings/
+      - sentiment/
+      - topics/
+      - features/
+    - OUTPUT_DIR/
+      - figures/
+    
+    Returns:
+        None
+    """
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(os.path.join(MODEL_DIR, "embeddings"), exist_ok=True)
     os.makedirs(os.path.join(MODEL_DIR, "sentiment"), exist_ok=True)
@@ -43,7 +77,43 @@ def setup_directories():
     logger.info("Created output directories")
 
 def run_data_pipeline(args):
-    """Run the data preprocessing pipeline."""
+    """Run the data preprocessing pipeline.
+    
+    This function executes the complete data preprocessing workflow:
+    1. Loads raw data from specified path
+    2. Cleans and normalizes text data
+    3. Computes text statistics (length, complexity)
+    4. Processes financial metrics
+    5. Generates target labels for prediction tasks
+    6. Splits data into train/validation/test sets
+    
+    Args:
+        args: Command-line arguments containing configuration parameters:
+            input_file (str): Path to input data file containing earnings reports
+            seed (int): Random seed for reproducibility of data splits
+            train_ratio (float): Portion of data for training (0.0-1.0)
+            val_ratio (float): Portion of data for validation (0.0-1.0)
+            output_dir (str): Directory where processed data will be saved
+            
+    Returns:
+        str: A unique version identifier for the processed data
+        
+    Raises:
+        FileNotFoundError: If the input data file is not found
+        ValueError: If data validation fails (e.g., invalid column names)
+        TypeError: If input data is not in the expected format
+        
+    Example:
+        >>> args = argparse.Namespace(
+        ...     input_file='data/earnings_reports.csv.gz',
+        ...     seed=42,
+        ...     train_ratio=0.7,
+        ...     val_ratio=0.15,
+        ...     output_dir='data/processed'
+        ... )
+        >>> version_id = run_data_pipeline(args)
+        >>> print(f"Data processed with version: {version_id}")
+    """
     logger.info("Starting data pipeline")
     
     try:
@@ -72,7 +142,46 @@ def run_data_pipeline(args):
         raise
 
 def run_nlp_analysis(args, version_id=None):
-    """Run the advanced NLP analysis."""
+    """Run the advanced NLP analysis pipeline.
+    
+    This function orchestrates the complete NLP analysis workflow:
+    1. Loads the appropriate data version
+    2. Performs embedding using specified method
+    3. Runs topic modeling
+    4. Conducts sentiment analysis
+    5. Extracts and combines features
+    6. Trains and evaluates predictive models
+    
+    Args:
+        args: Command-line arguments containing analysis parameters:
+            embedding_method (str): Method for text embedding ('tfidf', 'count', 'word2vec', 'transformer')
+            max_features (int): Maximum number of features for text vectorization
+            sentiment_method (str): Method for sentiment analysis ('loughran_mcdonald', 'textblob', etc.)
+            topic_method (str): Method for topic modeling ('lda', 'nmf', 'gensim_lda')
+            num_topics (int): Number of topics for topic modeling
+        version_id (str, optional): Data version identifier. If None,
+            the latest available version will be used.
+            
+    Returns:
+        bool: True if analysis completes successfully, False otherwise.
+        
+    Raises:
+        ValueError: If required models or data are not available
+        ImportError: If required libraries are missing
+        RuntimeError: If a critical component of the pipeline fails
+        
+    Example:
+        >>> args = argparse.Namespace(
+        ...     embedding_method='tfidf',
+        ...     max_features=5000,
+        ...     sentiment_method='loughran_mcdonald',
+        ...     topic_method='lda',
+        ...     num_topics=40
+        ... )
+        >>> success = run_nlp_analysis(args, version_id='v20230714')
+        >>> if success:
+        ...     print("NLP analysis completed successfully")
+    """
     logger.info("Starting NLP analysis")
     
     try:        # Load the data
@@ -187,17 +296,36 @@ def run_nlp_analysis(args, version_id=None):
         raise
 
 def run_full_pipeline(data_path=None, n_topics=None, force_reprocess=False, tune_topics=True):
-    """
-    Run the full analysis pipeline with specified parameters.
+    """Run the full analysis pipeline with specified parameters.
+    
+    This function orchestrates the entire earnings report analysis workflow by:
+    1. Setting up necessary directories
+    2. Running the data preprocessing pipeline
+    3. Running the NLP analysis pipeline
+    4. Configuring parameters for each component
     
     Args:
-        data_path: Path to input data file
-        n_topics: Number of topics for topic modeling (None for auto-tuning)
-        force_reprocess: Whether to force data reprocessing
-        tune_topics: Whether to tune the number of topics automatically
+        data_path (str, optional): Path to input data file. If None, uses the
+            default path from configuration. Defaults to None.
+        n_topics (int, optional): Number of topics for topic modeling. If None,
+            uses the default value or performs auto-tuning. Defaults to None.
+        force_reprocess (bool, optional): Whether to force data reprocessing
+            even if processed data already exists. Defaults to False.
+        tune_topics (bool, optional): Whether to automatically tune the
+            optimal number of topics based on coherence scores. Defaults to True.
         
     Returns:
-        bool: Success status
+        bool: True if the pipeline completes successfully, False otherwise.
+        
+    Example:
+        >>> # Run with default settings
+        >>> success = run_full_pipeline()
+        >>> # Run with custom settings
+        >>> success = run_full_pipeline(
+        ...     data_path='data/custom_dataset.csv.gz',
+        ...     n_topics=50,
+        ...     force_reprocess=True
+        ... )
     """
     # Set up directories
     setup_directories()
@@ -237,7 +365,27 @@ def run_full_pipeline(data_path=None, n_topics=None, force_reprocess=False, tune
     return success
 
 def run_dashboard():
-    """Launch the Streamlit dashboard."""
+    """Launch the Streamlit dashboard for interactive analysis.
+    
+    This function starts the Streamlit web application that provides
+    an interactive interface for exploring the earnings report analysis
+    results. It ensures Streamlit is installed and then launches the
+    dashboard as a subprocess.
+    
+    The dashboard provides:
+    - Text analysis for individual earnings reports
+    - Topic exploration and visualization
+    - Sentiment trend analysis
+    - Financial metric extraction
+    - Prediction simulation
+    
+    Returns:
+        bool: True if the dashboard was successfully launched, False otherwise.
+        
+    Note:
+        This function doesn't block - it returns immediately after launching
+        the dashboard process.
+    """
     logger.info("Launching Streamlit dashboard")
     
     try:
@@ -257,7 +405,53 @@ def run_dashboard():
         return False
 
 def main():
-    """Main entry point function."""
+    """Main entry point function for the NLP Earnings Report pipeline.
+    
+    This function serves as the command-line interface for the earnings report
+    analysis system. It:
+    1. Parses command-line arguments
+    2. Sets up logging and directories
+    3. Executes the requested pipeline components based on arguments
+    4. Handles errors and returns appropriate exit codes
+    
+    The function supports different operation modes:
+    - 'data': Run only the data preprocessing pipeline
+    - 'nlp': Run only the NLP analysis pipeline
+    - 'dashboard': Launch the interactive Streamlit dashboard
+    - 'all': Run the complete pipeline (default)
+    
+    Returns:
+        int: 0 for successful execution, non-zero for errors
+        
+    Command-line Arguments:
+        --action {data,nlp,dashboard,all}: Which components to run
+        --input_file PATH: Path to input data file
+        --text_column NAME: Name of column containing earnings text
+        --output_dir PATH: Directory to save processed data
+        --train_ratio FLOAT: Proportion of data for training
+        --val_ratio FLOAT: Proportion of data for validation
+        --seed INT: Random seed for reproducibility
+        --embedding_method {tfidf,count,word2vec,transformer}: Text embedding method
+        --max_features INT: Maximum vocabulary size
+        --sentiment_method {loughran_mcdonald,textblob,vader,transformer,combined}: 
+            Sentiment analysis method
+        --topic_method {lda,nmf,gensim_lda}: Topic modeling method
+        --num_topics INT: Number of topics for modeling
+    
+    Examples:
+        # Run the full pipeline with default settings:
+        $ python -m src.main --action all
+            
+        # Run only the data processing step with custom input:
+        $ python -m src.main --action data --input_file data/custom.csv.gz
+        
+        # Run NLP analysis with custom settings:
+        $ python -m src.main --action nlp --embedding_method transformer \
+            --num_topics 50 --sentiment_method vader
+            
+        # Launch the interactive dashboard:
+        $ python -m src.main --action dashboard
+    """
     parser = argparse.ArgumentParser(description='Enhanced NLP Earnings Report Analysis')
     
     # Add arguments

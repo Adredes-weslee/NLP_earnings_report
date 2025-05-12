@@ -22,18 +22,40 @@ except ImportError:
 logger = logging.getLogger('sentiment_analyzer')
 
 class SentimentAnalyzer:
-    """
-    Class for analyzing sentiment in financial texts using various methods.
-    Supports lexicon-based and transformer-based sentiment analysis.
+    """Sentiment analysis for financial texts using various methods.
+    
+    This class provides sentiment analysis capabilities for financial texts
+    using either lexicon-based approaches (e.g., Loughran-McDonald),
+    transformer-based models (e.g., FinBERT), or a combination of both.
+    
+    Attributes:
+        method (str): The sentiment analysis method being used.
+        model_name (str): Name of the transformer model if applicable.
+        transformer_model: The loaded transformer model if applicable.
+        lexicon (dict): The sentiment lexicon dictionary if using lexicon-based methods.
     """
     
     def __init__(self, method: str = 'loughran_mcdonald', model_name: str = 'ProsusAI/finbert'):
-        """
-        Initialize the sentiment analyzer.
+        """Initialize the sentiment analyzer with specified method and model.
         
         Args:
-            method: Sentiment analysis method ('loughran_mcdonald', 'transformer', 'combined')
-            model_name: Name of transformer model (if method='transformer' or 'combined')
+            method (str): Sentiment analysis method to use. Options are:
+                'loughran_mcdonald': Uses the financial-specific Loughran-McDonald lexicon.
+                'transformer': Uses a transformer-based model (requires transformers package).
+                'combined': Uses both lexicon and transformer approaches.
+                Defaults to 'loughran_mcdonald'.
+            model_name (str): Name of transformer model to use if method is 'transformer'
+                or 'combined'. Defaults to 'ProsusAI/finbert', which is specialized for
+                financial text.
+                
+        Raises:
+            ImportError: If transformer-based method is selected but the required
+                libraries are not installed.
+                
+        Example:
+            >>> analyzer = SentimentAnalyzer(method='combined')
+            >>> analyzer.load_resources()
+            >>> sentiment = analyzer.analyze("Revenue increased by 15% this quarter.")
         """
         self.method = method
         self.model_name = model_name
@@ -163,16 +185,30 @@ class SentimentAnalyzer:
         except Exception as e:
             logger.error(f"Error loading transformer model: {str(e)}")
             raise
-    
+        
     def _lexicon_sentiment(self, text: str) -> Dict[str, float]:
-        """
-        Calculate sentiment scores using lexicon-based approach.
+        """Calculate sentiment scores using the Loughran-McDonald lexicon.
+        
+        This method analyzes financial text using the Loughran-McDonald dictionary
+        specifically designed for financial sentiment analysis. It tokenizes the
+        input text, counts occurrences of words in each sentiment category, and
+        calculates normalized sentiment scores.
         
         Args:
-            text: Input text for sentiment analysis
+            text (str): Input text for sentiment analysis. Financial text to analyze.
             
         Returns:
-            Dict containing sentiment scores
+            Dict[str, float]: Dictionary containing sentiment scores with keys:
+                - 'positive': Ratio of positive words to total words
+                - 'negative': Ratio of negative words to total words
+                - 'uncertainty': Ratio of uncertainty words to total words
+                - 'litigious': Ratio of litigious words to total words
+                - 'net_sentiment': Net sentiment score (positive - negative) / total
+                - 'sentiment_ratio': Ratio of positive to negative word counts
+                
+        Note:
+            This method uses a simplified version of the Loughran-McDonald lexicon.
+            For production use, consider using the complete lexicon.
         """
         if not self.lexicon:
             self._load_loughran_mcdonald_lexicon()
@@ -198,16 +234,33 @@ class SentimentAnalyzer:
         }
         
         return scores
-    
     def _transformer_sentiment(self, text: str) -> Dict[str, float]:
-        """
-        Calculate sentiment scores using transformer-based approach.
+        """Calculate sentiment scores using transformer-based models.
+        
+        This method uses pre-trained transformer models (like FinBERT) to analyze
+        sentiment in financial texts. It handles long texts by breaking them into
+        chunks and averaging the predictions. For financial texts, FinBERT is
+        particularly effective as it's trained specifically for financial domain.
         
         Args:
-            text: Input text for sentiment analysis
+            text (str): Input text for sentiment analysis. Financial text to analyze.
             
         Returns:
-            Dict containing sentiment scores
+            Dict[str, float]: Dictionary containing sentiment scores with keys
+                that depend on the model used. For FinBERT:
+                - 'positive': Probability of positive sentiment
+                - 'negative': Probability of negative sentiment
+                - 'neutral': Probability of neutral sentiment
+                - 'net_sentiment': Difference between positive and negative scores
+                - 'sentiment_ratio': Ratio of positive to negative sentiment
+                
+        Raises:
+            ImportError: If transformers library is not available
+            Exception: If model loading fails or prediction errors occur
+            
+        Note:
+            Long texts are processed in chunks of 512 tokens to accommodate
+            transformer model context window limitations.
         """
         if not self.transformer_model:
             self._load_transformer_model()
@@ -235,16 +288,30 @@ class SentimentAnalyzer:
             scores['sentiment_ratio'] = scores.get('positive', 0) / (scores.get('negative', 0) + 0.001)
         
         return scores
-    
     def analyze(self, text: str) -> Dict[str, float]:
-        """
-        Analyze sentiment of the given text using the configured method.
+        """Analyze sentiment of the given text using the configured method.
+        
+        This method performs sentiment analysis on the provided text using
+        either lexicon-based methods, transformer-based methods, or a combination
+        of both, depending on the analyzer's configuration.
         
         Args:
-            text: Input text for sentiment analysis
+            text (str): Input text for sentiment analysis. Should be a string
+                containing the financial text to analyze.
             
         Returns:
-            Dict containing sentiment scores
+            Dict[str, float]: Dictionary containing sentiment scores with keys:
+                - 'positive': Score indicating positive sentiment (0-1)
+                - 'negative': Score indicating negative sentiment (0-1) 
+                - 'net_sentiment': Difference between positive and negative scores
+                - 'sentiment_ratio': Ratio of positive to negative sentiment
+                - Additional keys may be present depending on the method used
+                
+        Example:
+            >>> scores = analyzer.analyze("Revenue grew by 15% exceeding expectations.")
+            >>> print(f"Positive score: {scores['positive']:.2f}")
+            >>> print(f"Negative score: {scores['negative']:.2f}")
+            >>> print(f"Net sentiment: {scores['net_sentiment']:.2f}")
         """
         if not isinstance(text, str) or not text.strip():
             return {'positive': 0, 'negative': 0, 'net_sentiment': 0, 'sentiment_ratio': 1}
@@ -271,16 +338,31 @@ class SentimentAnalyzer:
             except Exception as e:
                 logger.warning(f"Transformer model failed, falling back to lexicon: {str(e)}")
                 return lexicon_scores
-    
+            
     def batch_analyze(self, texts: List[str]) -> pd.DataFrame:
-        """
-        Analyze sentiment for a batch of texts.
+        """Analyze sentiment for multiple texts in batch mode.
+        
+        This method processes a list of texts and returns sentiment scores for each.
+        It's more efficient than calling analyze() repeatedly for large datasets
+        as it logs progress and can be optimized for batch processing.
         
         Args:
-            texts: List of input texts
+            texts (List[str]): List of text strings to analyze. Each string
+                should contain financial text for sentiment analysis.
             
         Returns:
-            DataFrame with sentiment scores for each text
+            pd.DataFrame: DataFrame where each row contains sentiment scores for the
+                corresponding text in the input list. Columns match the keys returned
+                by the analyze() method (positive, negative, net_sentiment, etc.).
+                
+        Example:
+            >>> texts = ["Revenue increased by 20%", "Losses continue to mount"]
+            >>> results_df = analyzer.batch_analyze(texts)
+            >>> print(results_df[['positive', 'negative', 'net_sentiment']])
+        
+        Note:
+            For very large lists, consider breaking into smaller batches to
+            avoid memory issues, especially when using transformer models.
         """
         results = []
         
@@ -293,16 +375,34 @@ class SentimentAnalyzer:
         return pd.DataFrame(results)
     
     def enrich_dataframe(self, df: pd.DataFrame, text_column: str, prefix: str = 'sentiment_') -> pd.DataFrame:
-        """
-        Add sentiment analysis columns to a DataFrame.
+        """Add sentiment analysis columns to an existing DataFrame.
+        
+        This convenience method analyzes text in a DataFrame column and adds
+        the resulting sentiment scores as new columns. It handles missing values
+        and preserves the original DataFrame structure.
         
         Args:
-            df: Input DataFrame
-            text_column: Name of column containing text
-            prefix: Prefix for sentiment columns
+            df (pd.DataFrame): Input DataFrame containing text data.
+            text_column (str): Name of the column containing text to analyze.
+            prefix (str, optional): Prefix for newly created sentiment columns.
+                Defaults to 'sentiment_'.
             
         Returns:
-            DataFrame with sentiment columns added
+            pd.DataFrame: Original DataFrame with additional sentiment score columns.
+                New columns will be named with the specified prefix followed by
+                the sentiment score name (e.g., sentiment_positive).
+                
+        Raises:
+            KeyError: If text_column doesn't exist in the DataFrame.
+            
+        Example:
+            >>> earnings_df = pd.DataFrame({
+            ...     'report_text': ["Revenue grew by 15%", "Expenses increased"],
+            ...     'company': ["CompanyA", "CompanyB"]
+            ... })
+            >>> enriched_df = analyzer.enrich_dataframe(earnings_df, 'report_text')
+            >>> print(enriched_df.columns)
+            ['report_text', 'company', 'sentiment_positive', 'sentiment_negative', ...]
         """
         texts = df[text_column].fillna('').tolist()
         sentiment_df = self.batch_analyze(texts)
@@ -316,11 +416,26 @@ class SentimentAnalyzer:
         return result_df
     
     def save(self, path: str) -> None:
-        """
-        Save the sentiment analyzer configuration.
+        """Save the sentiment analyzer configuration to disk.
+        
+        This method saves the configuration of the sentiment analyzer to a specified
+        directory, allowing it to be loaded later using the load() class method.
+        The configuration includes the method type and model name.
         
         Args:
-            path: Directory path to save configuration
+            path (str): Directory path where the configuration will be saved.
+                If the directory doesn't exist, it will be created.
+                
+        Raises:
+            OSError: If there's an error creating the directory or writing the file.
+            
+        Example:
+            >>> analyzer = SentimentAnalyzer(method='combined')
+            >>> analyzer.save('models/sentiment/my_analyzer')
+        
+        Note:
+            This method saves only the configuration, not the actual model weights.
+            For transformer models, the weights will be downloaded again when loaded.
         """
         os.makedirs(path, exist_ok=True)
         
@@ -332,17 +447,30 @@ class SentimentAnalyzer:
         
         joblib.dump(config, os.path.join(path, 'sentiment_config.joblib'))
         logger.info(f"Sentiment analyzer configuration saved to {path}")
-    
+        
     @classmethod
     def load(cls, path: str) -> 'SentimentAnalyzer':
-        """
-        Load a sentiment analyzer from configuration.
+        """Load a sentiment analyzer from a saved configuration.
+        
+        This class method reconstructs a SentimentAnalyzer instance from a
+        configuration saved using the save() method. It loads the method type
+        and model name settings.
         
         Args:
-            path: Directory path to load configuration from
+            path (str): Directory path containing the saved configuration.
+                Should contain a sentiment_config.joblib file.
             
         Returns:
-            Loaded SentimentAnalyzer instance
+            SentimentAnalyzer: A new SentimentAnalyzer instance configured according
+                to the loaded settings.
+                
+        Raises:
+            FileNotFoundError: If the configuration file cannot be found.
+            ValueError: If the configuration is invalid or corrupted.
+            
+        Example:
+            >>> analyzer = SentimentAnalyzer.load('models/sentiment/my_analyzer')
+            >>> results = analyzer.analyze("Revenue increased by 15% this quarter.")
         """
         config = joblib.load(os.path.join(path, 'sentiment_config.joblib'))
         

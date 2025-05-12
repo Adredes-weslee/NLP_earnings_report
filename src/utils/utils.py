@@ -1,5 +1,16 @@
-"""
-Consolidated utility functions for the NLP earnings report project.
+"""Consolidated utility functions for the NLP earnings report project.
+
+This module provides common utility functions used throughout the project,
+including:
+
+- File handling utilities (save/load models, create directories)
+- Visualization helpers (plot generation, wordclouds)
+- Data processing tools (text normalization, financial calculations)
+- Evaluation metrics for NLP and ML models
+- Logging configuration
+
+These utilities support the core functionality of data processing,
+NLP analysis, and results presentation.
 """
 
 import os
@@ -24,16 +35,23 @@ logging.basicConfig(
 logger = logging.getLogger('utils')
 
 def setup_logging(name: str, log_file: Optional[str] = None, level: int = logging.INFO) -> logging.Logger:
-    """
-    Set up logging configuration for a module.
+    """Set up logging configuration for a module.
+    
+    This function configures a logger with consistent formatting and optional
+    file output. It creates both console and file handlers if a log file is specified.
     
     Args:
-        name: Logger name
-        log_file: Path to log file
-        level: Logging level
+        name (str): Logger name to identify the module in log messages.
+        log_file (str, optional): Path to the log file. If None, logging is 
+            only sent to the console. Defaults to None.
+        level (int, optional): Logging level threshold. Defaults to logging.INFO.
         
     Returns:
-        logging.Logger: Configured logger
+        logging.Logger: Configured logger instance ready for use.
+        
+    Example:
+        >>> logger = setup_logging('data_processor', 'logs/processing.log')
+        >>> logger.info('Data processing started')
     """
     logger = logging.getLogger(name)
     logger.setLevel(level)
@@ -62,25 +80,38 @@ def setup_logging(name: str, log_file: Optional[str] = None, level: int = loggin
     return logger
 
 def load_pickle(file_path: str) -> Any:
-    """
-    Load a pickle file.
+    """Load serialized object from a pickle file.
+    
+    Deserialize a Python object from a binary file using the pickle protocol.
     
     Args:
-        file_path: Path to pickle file
+        file_path (str): Path to the pickle file to be loaded.
         
     Returns:
-        Any: Loaded object
+        Any: The deserialized Python object.
+        
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
+        pickle.UnpicklingError: If the file cannot be unpickled.
+        
+    Example:
+        >>> model = load_pickle('models/sentiment_classifier.pkl')
     """
     with open(file_path, 'rb') as f:
         return pickle.load(f)
 
 def save_pickle(obj: Any, file_path: str) -> None:
-    """
-    Save an object to a pickle file.
+    """Serialize a Python object to a pickle file.
+    
+    Creates necessary directories if they don't exist and serializes
+    the given object to the specified file path using the pickle protocol.
     
     Args:
-        obj: Object to save
-        file_path: Path to save pickle file
+        obj (Any): The Python object to serialize.
+        file_path (str): Destination path where the pickle file will be saved.
+    
+    Example:
+        >>> save_pickle(trained_model, 'models/sentiment_classifier.pkl')
     """
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, 'wb') as f:
@@ -88,50 +119,78 @@ def save_pickle(obj: Any, file_path: str) -> None:
     logger.info(f"Object saved to {file_path}")
 
 def load_joblib(file_path: str) -> Any:
-    """
-    Load a joblib file.
+    """Load a serialized object from a joblib file.
+    
+    Deserialize a Python object using joblib, which is optimized for 
+    efficiently serializing large numpy arrays and scikit-learn models.
     
     Args:
-        file_path: Path to joblib file
+        file_path (str): Path to the joblib file to be loaded.
         
     Returns:
-        Any: Loaded object
+        Any: The deserialized Python object.
+        
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
+        
+    Example:
+        >>> vectorizer = load_joblib('models/tfidf_vectorizer.joblib')
     """
     return joblib.load(file_path)
 
 def save_joblib(obj: Any, file_path: str) -> None:
-    """
-    Save an object to a joblib file.
+    """Serialize a Python object to a joblib file.
+    
+    Creates necessary directories if they don't exist and serializes
+    the given object to the specified file path using joblib, which is 
+    optimized for efficiently serializing large numpy arrays and scikit-learn models.
     
     Args:
-        obj: Object to save
-        file_path: Path to save joblib file
+        obj (Any): The Python object to serialize.
+        file_path (str): Destination path where the joblib file will be saved.
+    
+    Example:
+        >>> save_joblib(tfidf_vectorizer, 'models/tfidf_vectorizer.joblib')
     """
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     joblib.dump(obj, file_path)
     logger.info(f"Object saved to {file_path}")
 
 def load_json(file_path: str) -> Dict:
-    """
-    Load a JSON file.
+    """Load data from a JSON file.
+    
+    Parse JSON file and return the resulting Python dictionary.
     
     Args:
-        file_path: Path to JSON file
+        file_path (str): Path to the JSON file to be loaded.
         
     Returns:
-        dict: Loaded JSON object
+        Dict: The parsed JSON data as a Python dictionary.
+        
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
+        json.JSONDecodeError: If the file contains invalid JSON.
+        
+    Example:
+        >>> config = load_json('config/parameters.json')
     """
     with open(file_path, 'r') as f:
         return json.load(f)
 
 def save_json(obj: Dict, file_path: str, indent: int = 2) -> None:
-    """
-    Save an object to a JSON file.
+    """Serialize a dictionary to a JSON file.
+    
+    Creates necessary directories if they don't exist and writes
+    the given dictionary to the specified file path in JSON format.
     
     Args:
-        obj: Object to save
-        file_path: Path to save JSON file
-        indent: Indentation level
+        obj (Dict): The dictionary to serialize to JSON.
+        file_path (str): Destination path where the JSON file will be saved.
+        indent (int, optional): Number of spaces for indentation in the output file.
+            Makes the file more human-readable. Defaults to 2.
+    
+    Example:
+        >>> save_json({'threshold': 0.75, 'max_features': 1000}, 'config/parameters.json')
     """
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, 'w') as f:
@@ -141,14 +200,28 @@ def save_json(obj: Dict, file_path: str, indent: int = 2) -> None:
 def plot_feature_importance(feature_importance: Dict[str, float], n: int = 20, 
                           figsize: Tuple[int, int] = (12, 10), 
                           color_scheme: str = 'pos_neg') -> plt.Figure:
-    """
-    Plot feature importances.
+    """Create a horizontal bar chart of feature importances.
+    
+    Visualizes the most important features based on their importance values,
+    with options to display different colors for positive and negative values.
     
     Args:
-        feature_importance: Dictionary mapping feature names to importance values
-        n: Number of top features to show
-        figsize: Figure size (width, height)
-        color_scheme: Color scheme to use ('pos_neg' or 'single')
+        feature_importance (Dict[str, float]): Dictionary mapping feature names to 
+            their importance values.
+        n (int, optional): Number of top features to display. Defaults to 20.
+        figsize (Tuple[int, int], optional): Figure size as (width, height). 
+            Defaults to (12, 10).
+        color_scheme (str, optional): Color scheme to use, either 'pos_neg' to color
+            positive and negative values differently, or 'single' for a uniform color.
+            Defaults to 'pos_neg'.
+            
+    Returns:
+        plt.Figure: Matplotlib figure object containing the feature importance plot.
+        
+    Example:
+        >>> importances = {'age': 0.25, 'income': 0.15, 'education': -0.10}
+        >>> fig = plot_feature_importance(importances, n=3)
+        >>> fig.savefig('feature_importance.png')
         
     Returns:
         matplotlib.figure.Figure: Figure object
@@ -187,14 +260,28 @@ def plot_feature_importance(feature_importance: Dict[str, float], n: int = 20,
 def plot_wordcloud(word_weights: Dict[str, float], title: str = 'Word Cloud',
                  figsize: Tuple[int, int] = (10, 6), 
                  background_color: str = 'white') -> plt.Figure:
-    """
-    Generate a word cloud visualization from word weights.
+    """Generate a word cloud visualization from word weights.
+    
+    Creates a visual representation where word size reflects their weight,
+    useful for visualizing term importance in documents.
     
     Args:
-        word_weights: Dictionary mapping words to their weights
-        title: Title for the plot
-        figsize: Figure size (width, height)
-        background_color: Background color of the word cloud
+        word_weights (Dict[str, float]): Dictionary mapping words to their weights.
+            Words with higher weights appear larger in the visualization.
+        title (str, optional): Title to display above the word cloud. 
+            Defaults to 'Word Cloud'.
+        figsize (Tuple[int, int], optional): Figure size as (width, height).
+            Defaults to (10, 6).
+        background_color (str, optional): Background color of the word cloud.
+            Defaults to 'white'.
+            
+    Returns:
+        plt.Figure: Matplotlib figure object containing the word cloud visualization.
+        
+    Example:
+        >>> word_freq = {'finance': 10, 'revenue': 8, 'growth': 6, 'earnings': 5}
+        >>> fig = plot_wordcloud(word_freq, title='Financial Terms')
+        >>> fig.savefig('financial_wordcloud.png')
         
     Returns:
         matplotlib.figure.Figure: Word cloud figure
@@ -217,15 +304,26 @@ def plot_wordcloud(word_weights: Dict[str, float], title: str = 'Word Cloud',
     return fig
 
 def format_topics(topic_words: Dict[int, List[str]], n_words: int = 5) -> str:
-    """
-    Format topics for display.
+    """Format topic model results for human-readable display.
+    
+    Converts a dictionary of topics and their associated words into a 
+    formatted string for presentation in reports or dashboards.
     
     Args:
-        topic_words: Dictionary mapping topic indices to lists of top words
-        n_words: Number of words to include per topic
+        topic_words (Dict[int, List[str]]): Dictionary mapping topic indices to 
+            lists of the most representative words for each topic.
+        n_words (int, optional): Number of words to include per topic. 
+            Defaults to 5.
         
     Returns:
-        str: Formatted topic string
+        str: Newline-separated string of formatted topics, where each line contains
+            a topic number followed by its most representative words.
+            
+    Example:
+        >>> topics = {0: ['finance', 'revenue', 'growth'], 1: ['product', 'launch', 'market']}
+        >>> print(format_topics(topics, n_words=2))
+        Topic 0: finance, revenue
+        Topic 1: product, launch
     """
     formatted = []
     for topic_idx, words in sorted(topic_words.items()):
@@ -237,17 +335,28 @@ def format_topics(topic_words: Dict[int, List[str]], n_words: int = 5) -> str:
 def plot_topic_coherence(topic_counts: List[int], coherence_scores: List[float], 
                        optimal_topic_count: int = None,
                        figsize: Tuple[int, int] = (10, 6)) -> plt.Figure:
-    """
-    Plot topic coherence scores.
+    """Plot topic model coherence scores across different numbers of topics.
+    
+    Creates a line plot showing how coherence scores change with different
+    numbers of topics, helping to identify the optimal topic count.
     
     Args:
-        topic_counts: List of topic counts evaluated
-        coherence_scores: List of coherence scores for each topic count
-        optimal_topic_count: Optimal topic count to highlight
-        figsize: Figure size (width, height)
+        topic_counts (List[int]): List of the number of topics evaluated.
+        coherence_scores (List[float]): Corresponding coherence scores for 
+            each number of topics.
+        optimal_topic_count (int, optional): The optimal number of topics to 
+            highlight with a vertical line. If None, no optimal value is highlighted.
+            Defaults to None.
+        figsize (Tuple[int, int], optional): Figure size as (width, height).
+            Defaults to (10, 6).
         
     Returns:
-        matplotlib.figure.Figure: Figure object
+        plt.Figure: Matplotlib figure object containing the coherence plot.
+        
+    Example:
+        >>> topics = [5, 10, 15, 20]
+        >>> scores = [0.42, 0.45, 0.38, 0.36]
+        >>> fig = plot_topic_coherence(topics, scores, optimal_topic_count=10)
     """
     plt.figure(figsize=figsize)
     plt.plot(topic_counts, coherence_scores, marker='o')
@@ -266,15 +375,26 @@ def plot_topic_coherence(topic_counts: List[int], coherence_scores: List[float],
 
 def plot_sentiment_distribution(sentiment_data: pd.DataFrame, 
                               figsize: Tuple[int, int] = (12, 6)) -> plt.Figure:
-    """
-    Plot sentiment distribution.
+    """Plot histograms of sentiment scores from a DataFrame.
+    
+    Creates a series of histograms showing the distribution of sentiment scores
+    across different sentiment dimensions (e.g., polarity, subjectivity).
     
     Args:
-        sentiment_data: DataFrame with sentiment scores
-        figsize: Figure size (width, height)
+        sentiment_data (pd.DataFrame): DataFrame containing columns of sentiment scores.
+            Each column is expected to represent a different sentiment metric.
+        figsize (Tuple[int, int], optional): Figure size as (width, height).
+            Defaults to (12, 6).
         
     Returns:
-        matplotlib.figure.Figure: Figure object
+        plt.Figure: Matplotlib figure object containing the sentiment histograms.
+        
+    Example:
+        >>> df = pd.DataFrame({
+        ...     'polarity': [0.2, 0.5, -0.1, 0.3],
+        ...     'subjectivity': [0.4, 0.8, 0.3, 0.6]
+        ... })
+        >>> fig = plot_sentiment_distribution(df)
     """
     plt.figure(figsize=figsize)
     
@@ -288,15 +408,26 @@ def plot_sentiment_distribution(sentiment_data: pd.DataFrame,
 
 def get_feature_group_importances(feature_importance: Dict[str, float], 
                                 feature_groups: Dict[str, List[str]]) -> Dict[str, float]:
-    """
-    Calculate importance of feature groups.
+    """Calculate aggregated importance scores for groups of features.
+    
+    Combines individual feature importance values into group-level importance
+    scores by summing the absolute importance values for all features in each group.
     
     Args:
-        feature_importance: Dictionary mapping feature names to importance values
-        feature_groups: Dictionary mapping group names to lists of feature names
+        feature_importance (Dict[str, float]): Dictionary mapping individual feature 
+            names to their importance values.
+        feature_groups (Dict[str, List[str]]): Dictionary mapping group names to 
+            lists of feature names that belong to each group.
         
     Returns:
-        Dict[str, float]: Dictionary mapping group names to total importance
+        Dict[str, float]: Dictionary mapping group names to their aggregate 
+            importance scores.
+            
+    Example:
+        >>> feature_imp = {'age': 0.2, 'income': 0.3, 'education': 0.1}
+        >>> groups = {'demographics': ['age', 'education'], 'financial': ['income']}
+        >>> get_feature_group_importances(feature_imp, groups)
+        {'demographics': 0.3, 'financial': 0.3}
     """
     group_importances = {}
     
@@ -308,15 +439,23 @@ def get_feature_group_importances(feature_importance: Dict[str, float],
 
 def plot_feature_group_importance(group_importances: Dict[str, float],
                                 figsize: Tuple[int, int] = (10, 6)) -> plt.Figure:
-    """
-    Plot feature group importances.
+    """Create a bar chart of feature group importance values.
+    
+    Visualizes the importance of different feature groups in a model,
+    helping to identify which types of features contribute most to predictions.
     
     Args:
-        group_importances: Dictionary mapping group names to importance values
-        figsize: Figure size (width, height)
+        group_importances (Dict[str, float]): Dictionary mapping feature group names 
+            to their aggregated importance values.
+        figsize (Tuple[int, int], optional): Figure size as (width, height).
+            Defaults to (10, 6).
         
     Returns:
-        matplotlib.figure.Figure: Figure object
+        plt.Figure: Matplotlib figure object containing the feature group importance plot.
+        
+    Example:
+        >>> groups = {'demographics': 0.3, 'financial': 0.5, 'behavioral': 0.2}
+        >>> fig = plot_feature_group_importance(groups)
     """
     # Create DataFrame and sort by importance
     df = pd.DataFrame({
@@ -335,14 +474,23 @@ def plot_feature_group_importance(group_importances: Dict[str, float],
     return plt.gcf()
 
 def fig_to_base64(fig: plt.Figure) -> str:
-    """
-    Convert a matplotlib figure to base64 string for embedding in HTML.
+    """Convert a matplotlib figure to a base64 encoded string.
+    
+    Transforms a matplotlib figure into a base64 string representation that
+    can be embedded directly in HTML documents, such as in dashboard visualizations.
     
     Args:
-        fig: Matplotlib figure
+        fig (plt.Figure): The matplotlib figure object to convert.
         
     Returns:
-        str: Base64-encoded string
+        str: Base64 encoded string representation of the figure.
+        
+    Example:
+        >>> import matplotlib.pyplot as plt
+        >>> fig, ax = plt.subplots()
+        >>> ax.plot([1, 2, 3], [4, 5, 6])
+        >>> img_str = fig_to_base64(fig)
+        >>> html_img = f'<img src="data:image/png;base64,{img_str}"/>'
     """
     buf = BytesIO()
     fig.savefig(buf, format='png', bbox_inches='tight')
@@ -352,14 +500,22 @@ def fig_to_base64(fig: plt.Figure) -> str:
     return img_str
 
 def classify_sentiment(sentiment_scores: Dict[str, float]) -> str:
-    """
-    Classify text sentiment based on sentiment scores.
+    """Classify text sentiment as positive, negative, or neutral.
+    
+    Analyzes sentiment scores to determine the overall sentiment classification
+    based on polarity thresholds.
     
     Args:
-        sentiment_scores: Dictionary of sentiment scores
+        sentiment_scores (Dict[str, float]): Dictionary containing sentiment 
+            metrics like 'positive', 'negative', and 'polarity' scores.
         
     Returns:
-        str: Sentiment classification
+        str: Sentiment classification as either "Positive", "Negative", or "Neutral".
+        
+    Example:
+        >>> scores = {'positive': 0.25, 'negative': 0.05, 'polarity': 0.2}
+        >>> classify_sentiment(scores)
+        'Positive'
     """
     # Get key sentiment metrics
     positive = sentiment_scores.get('positive', 0)
@@ -375,17 +531,26 @@ def classify_sentiment(sentiment_scores: Dict[str, float]) -> str:
 
 def generate_wordcloud_for_class(texts: List[str], labels: List[int], 
                               class_label: int, background_color: str = 'white') -> plt.Figure:
-    """
-    Generate a word cloud for documents of a specific class.
+    """Generate a word cloud visualization for documents of a specific class.
+    
+    Creates a visual representation of the most common words in documents
+    belonging to a specified class, with word size reflecting frequency.
     
     Args:
-        texts: List of text documents
-        labels: List of class labels
-        class_label: The class label to filter by
-        background_color: Background color for the wordcloud
+        texts (List[str]): List of text documents to analyze.
+        labels (List[int]): List of class labels corresponding to each text document.
+        class_label (int): The specific class label to filter for.
+        background_color (str, optional): Background color for the word cloud.
+            Defaults to 'white'.
         
     Returns:
-        matplotlib.figure.Figure: Word cloud figure
+        plt.Figure: Matplotlib figure containing the word cloud visualization,
+            or a placeholder figure if no documents match the class label.
+            
+    Example:
+        >>> docs = ["growth in revenue", "profit declined", "stable outlook"]
+        >>> class_ids = [1, 0, 1]
+        >>> fig = generate_wordcloud_for_class(docs, class_ids, class_label=1)
     """
     # Filter texts by class label
     class_texts = [text for text, label in zip(texts, labels) if label == class_label]

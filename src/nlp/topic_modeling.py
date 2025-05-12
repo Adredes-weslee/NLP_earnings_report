@@ -33,21 +33,45 @@ except ImportError:
 logger = logging.getLogger('topic_modeler')
 
 class TopicModeler:
-    """
-    Class for topic modeling on financial texts.
-    Supports LDA, NMF, and BERTopic approaches.
+    """Topic modeling for financial texts analysis.
+    
+    This class provides topic modeling capabilities for financial texts 
+    using various approaches including Latent Dirichlet Allocation (LDA),
+    Non-negative Matrix Factorization (NMF), and transformer-based models
+    (BERTopic) when available.
+    
+    Attributes:
+        method (str): Topic modeling method used ('lda', 'nmf', or 'bertopic').
+        num_topics (int): Number of topics to extract.
+        random_state (int): Random seed for reproducibility.
+        topic_word_prior (float): Topic-word prior for LDA (alpha parameter).
+        doc_topic_prior_factor (float): Document-topic prior factor for LDA (beta).
+        model: The underlying topic model instance.
+        vectorizer: Document vectorizer used for creating document-term matrices.
+        topic_words: List of words associated with each topic.
+        feature_names: Names of features in the document-term matrix.
+        topic_word_distributions: Word probability distributions for each topic.
     """
     def __init__(self, method: str = 'lda', num_topics: int = NUM_TOPICS, random_state: int = RANDOM_STATE,
                  topic_word_prior: float = TOPIC_WORD_PRIOR, doc_topic_prior_factor: float = DOC_TOPIC_PRIOR_FACTOR):
-        """
-        Initialize the topic modeler.
+        """Initialize the topic modeler with specified parameters.
         
         Args:
-            method: Topic modeling method ('lda', 'nmf', 'bertopic')
-            num_topics: Number of topics to extract (not used for BERTopic)
-            random_state: Random seed for reproducibility
-            topic_word_prior: Topic-word prior for LDA (alpha)
-            doc_topic_prior_factor: Document-topic prior factor for LDA (beta)
+            method (str): Topic modeling method to use. Options are 'lda', 'nmf', or 
+                'bertopic'. Defaults to 'lda'.
+            num_topics (int): Number of topics to extract. Not used for BERTopic.
+                Defaults to value from config (NUM_TOPICS).
+            random_state (int): Random seed for reproducibility.
+                Defaults to value from config (RANDOM_STATE).
+            topic_word_prior (float): Topic-word prior for LDA (alpha parameter).
+                Defaults to value from config (TOPIC_WORD_PRIOR).
+            doc_topic_prior_factor (float): Document-topic prior factor for LDA (beta).
+                Defaults to value from config (DOC_TOPIC_PRIOR_FACTOR).
+                
+        Example:
+            >>> modeler = TopicModeler(method='lda', num_topics=20)
+            >>> modeler.fit(texts)
+            >>> topics = modeler.transform(new_texts)
         """
         self.method = method
         self.num_topics = num_topics
@@ -67,17 +91,28 @@ class TopicModeler:
         if method == 'bertopic' and not BERTOPIC_AVAILABLE:
             logger.warning("BERTopic method requested but not available. Falling back to LDA.")
             self.method = 'lda'
-    
+            
     def create_document_term_matrix(self, texts: List[str], save_path: str = None) -> Tuple:
-        """
-        Create a document-term matrix from cleaned texts
+        """Create a document-term matrix from cleaned texts.
+        
+        This method constructs a document-term matrix using CountVectorizer
+        with financial text-specific settings. It filters out common stopwords
+        and applies parameters from the configuration.
         
         Args:
-            texts: Cleaned text data
-            save_path: Path to save the vectorizer
+            texts (List[str]): List of cleaned text documents.
+            save_path (str, optional): Path to save the vectorizer for later use.
+                If None, the vectorizer is not saved.
             
         Returns:
-            tuple: (document-term matrix, vectorizer object, feature names)
+            Tuple: A tuple containing:
+                - document-term matrix (sparse matrix)
+                - vectorizer object (CountVectorizer)
+                - vocabulary/feature names (list)
+                
+        Example:
+            >>> dtm, vec, vocab = modeler.create_document_term_matrix(texts)
+            >>> print(f"Matrix shape: {dtm.shape}")
         """
         from nltk.corpus import stopwords
         stops = stopwords.words('english')
@@ -108,21 +143,38 @@ class TopicModeler:
                            min_topics: int = 10, max_topics: int = 100, step: int = 5, 
                            sample_size: int = 2000, save_results: bool = True,
                            output_dir: str = None) -> List[Dict[str, Any]]:
-        """
-        Tune LDA model by testing a range of topic counts
+        """Optimize the number of topics by evaluating coherence scores.
+        
+        This method tests LDA models with different numbers of topics and
+        computes coherence scores to identify the optimal topic count.
+        It can optionally save the results for later analysis.
         
         Args:
-            dtm: Document-term matrix
-            vocab: List of vocabulary terms (if None, uses self.feature_names)
-            min_topics: Minimum number of topics to try
-            max_topics: Maximum number of topics to try
-            step: Step size for topic count
-            sample_size: Number of documents to sample for tuning
-            save_results: Whether to save the tuning results
-            output_dir: Directory to save results
+            dtm: Document-term matrix (sparse or dense).
+            vocab (List[str], optional): List of vocabulary terms.
+                If None, uses self.feature_names.
+            min_topics (int, optional): Minimum number of topics to try.
+                Defaults to 10.
+            max_topics (int, optional): Maximum number of topics to try.
+                Defaults to 100.
+            step (int, optional): Step size for topic count increments.
+                Defaults to 5.
+            sample_size (int, optional): Number of documents to sample for tuning.
+                Using a sample can speed up the process. Defaults to 2000.
+            save_results (bool, optional): Whether to save the tuning results.
+                Defaults to True.
+            output_dir (str, optional): Directory to save results.
+                If None and save_results is True, results are saved to the default model directory.
             
         Returns:
-            List of dictionaries with coherence scores by topic count
+            List[Dict[str, Any]]: List of dictionaries with topic counts and their
+            corresponding coherence scores and perplexity values.
+            
+        Example:
+            >>> dtm, _, vocab = modeler.create_document_term_matrix(texts)
+            >>> results = modeler.optimize_num_topics(dtm, vocab, min_topics=5, max_topics=50, step=5)
+            >>> best_result = max(results, key=lambda x: x.get('coherence', 0))
+            >>> print(f"Best number of topics: {best_result['topics']}")
         """
         vocab_to_use = vocab if vocab is not None else self.feature_names
         
@@ -170,16 +222,29 @@ class TopicModeler:
     def plot_topic_coherence(self, records: List[Dict[str, Any]], 
                             save_plot: bool = True, 
                             output_dir: str = None) -> Tuple[int, plt.Figure]:
-        """
-        Plot the topic coherence scores from LDA tuning
+        """Plot the topic coherence scores from LDA tuning.
+        
+        This method creates a visualization of topic coherence scores across
+        different numbers of topics, helping to identify the optimal topic count.
+        It highlights the optimal number of topics with a vertical line.
         
         Args:
-            records: List of dictionaries with tuning results
-            save_plot: Whether to save the plot
-            output_dir: Directory to save the plot
+            records (List[Dict[str, Any]]): List of dictionaries with tuning results
+                from the optimize_num_topics method.
+            save_plot (bool, optional): Whether to save the plot to a file.
+                Defaults to True.
+            output_dir (str, optional): Directory to save the plot.
+                If None and save_plot is True, uses the default output directory.
             
         Returns:
-            tuple: (optimal topic count, plot)
+            Tuple[int, plt.Figure]: A tuple containing:
+                - optimal_topics (int): The optimal number of topics
+                - fig (plt.Figure): The matplotlib figure object
+                
+        Example:
+            >>> results = modeler.optimize_num_topics(dtm, vocab)
+            >>> optimal_topics, fig = modeler.plot_topic_coherence(results)
+            >>> print(f"Optimal number of topics: {optimal_topics}")
         """
         topic_counts = [rec['topics'] for rec in records]
         umass_means = [rec['mean_umass'] for rec in records]
@@ -209,18 +274,39 @@ class TopicModeler:
     
     def fit(self, dtm, feature_names=None, vectorizer=None, n_topics=None, 
         save_model=True, model_dir=None):
-        """
-        Fit the topic model with the specified number of topics
+        """Fit the topic model with the specified document-term matrix.
+        
+        This method trains the topic model using the provided document-term matrix.
+        It supports different topic modeling approaches including LDA, NMF,
+        and BERTopic (if available). The trained model can be saved for later use.
         
         Args:
-            dtm: Document-term matrix
-            feature_names: Optional list of feature names (vocabulary)
-            n_topics: Number of topics (if None, uses self.num_topics)
-            save_model: Whether to save the model
-            model_dir: Directory to save the model. If None, uses TOPIC_MODEL_PATH from config
+            dtm: Document-term matrix, either sparse (scipy.sparse) or dense (numpy.ndarray).
+                For LDA/NMF: should be a document-term matrix.
+                For BERTopic: can be either documents or embeddings.
+            feature_names (list, optional): List of feature names (vocabulary terms).
+                If None, uses self.feature_names. Defaults to None.
+            vectorizer (CountVectorizer, optional): Vectorizer used to create DTM.
+                If provided, it's stored for later use. Defaults to None.
+            n_topics (int, optional): Number of topics to extract.
+                If None, uses self.num_topics. Defaults to None.
+            save_model (bool, optional): Whether to save the trained model to disk.
+                Defaults to True.
+            model_dir (str, optional): Directory to save the model.
+                If None, uses TOPIC_MODEL_PATH from config. Defaults to None.
             
         Returns:
-            tuple: (topic model, topic distribution matrix)
+            tuple: A tuple containing:
+                - model: The fitted topic model instance
+                - topics: Topic distribution matrix for the input documents
+                
+        Raises:
+            ValueError: If an unsupported topic modeling method is specified
+            
+        Example:
+            >>> dtm, vectorizer, vocab = modeler.create_document_term_matrix(texts)
+            >>> model, topics = modeler.fit(dtm, feature_names=vocab, vectorizer=vectorizer)
+            >>> print(f"Topics shape: {topics.shape}")
         """
         # Store feature names if provided
         if feature_names is not None:
@@ -303,16 +389,31 @@ class TopicModeler:
     def get_top_words(self, n_words: int = 10, 
                      save_results: bool = True, 
                      output_dir: Optional[str] = None) -> Dict[int, List[str]]:
-        """
-        Get the top words for each topic in the model
+        """Get the top words for each topic in the model.
+        
+        This method extracts the most representative words for each topic
+        based on their probability in the topic-word distribution matrix.
+        The results can be saved to files for later analysis or visualization.
         
         Args:
-            n_words: Number of top words to extract per topic
-            save_results: Whether to save the results
-            output_dir: Directory to save the results
+            n_words (int, optional): Number of top words to extract per topic.
+                Defaults to 10.
+            save_results (bool, optional): Whether to save the results to files.
+                Defaults to True.
+            output_dir (str, optional): Directory to save the results.
+                If None and save_results is True, uses the default output directory.
             
         Returns:
-            dict: Dictionary mapping topic indices to lists of top words
+            Dict[int, List[str]]: Dictionary mapping topic indices to lists of top words.
+            Each list contains the n_words most representative words for that topic.
+            
+        Raises:
+            ValueError: If the model has not been fitted yet.
+            
+        Example:
+            >>> topic_words = modeler.get_top_words(n_words=15)
+            >>> for topic_idx, words in topic_words.items():
+            ...     print(f"Topic {topic_idx}: {', '.join(words)}")
         """
         if self.model is None:
             logger.error("Model not fitted. Call fit() first.")
@@ -350,17 +451,38 @@ class TopicModeler:
     def plot_wordcloud(self, topic_idx: int, n_words: int = 30, 
                       figsize: Tuple[int, int] = (10, 6), 
                       background_color: str = 'white') -> plt.Figure:
-        """
-        Generate a word cloud for a specific topic
+        """Generate a word cloud visualization for a specific topic.
+        
+        This method creates a visual representation of the most important words
+        in a given topic, where the size of each word indicates its relative
+        importance in that topic. The word cloud provides an intuitive way to
+        understand the theme of a topic.
         
         Args:
-            topic_idx: Index of the topic to visualize
-            n_words: Number of words to include
-            figsize: Figure size
-            background_color: Background color of the word cloud
+            topic_idx (int): Index of the topic to visualize. Should be in range
+                [0, num_topics-1].
+            n_words (int, optional): Number of most important words to include
+                in the visualization. Defaults to 30.
+            figsize (Tuple[int, int], optional): Size of the figure in inches
+                as (width, height). Defaults to (10, 6).
+            background_color (str, optional): Background color of the word cloud.
+                Can be any valid matplotlib color. Defaults to 'white'.
             
         Returns:
-            matplotlib.figure.Figure: Word cloud figure
+            matplotlib.figure.Figure: The word cloud figure that can be displayed
+                or saved to a file.
+                
+        Raises:
+            ValueError: If the model has not been fitted yet
+            IndexError: If topic_idx is out of range
+            
+        Example:
+            >>> # Generate and display word cloud for topic 5
+            >>> fig = modeler.plot_wordcloud(topic_idx=5, n_words=40)
+            >>> plt.show()
+            >>> 
+            >>> # Save word cloud to a file
+            >>> fig.savefig('topic5_wordcloud.png', dpi=300, bbox_inches='tight')
         """
         if self.model is None or self.feature_names is None:
             logger.error("Model not fitted or feature names not available.")
@@ -394,14 +516,35 @@ class TopicModeler:
         return fig
     
     def transform(self, dtm):
-        """
-        Transform document-term matrix to topic distributions
+        """Transform document-term matrix to topic distributions.
+        
+        This method applies a fitted topic model to new documents to extract
+        their topic distributions. It requires that the model has been previously
+        fitted using the fit() method.
         
         Args:
-            dtm: Document-term matrix
+            dtm: Document-term matrix for the documents to transform.
+                Should match the format used during fitting:
+                - For LDA/NMF: Document-term matrix (sparse or dense)
+                - For BERTopic: Text documents or their embeddings
             
         Returns:
-            array: Topic distributions for input documents
+            numpy.ndarray: Topic distributions for input documents. Each row
+                represents a document, and each column represents the document's
+                association with a topic. Shape is (n_documents, n_topics).
+                
+        Raises:
+            ValueError: If the model has not been fitted yet
+            
+        Example:
+            >>> # Fit model on training data
+            >>> train_dtm, _, vocab = modeler.create_document_term_matrix(train_texts)
+            >>> modeler.fit(train_dtm, feature_names=vocab)
+            >>> 
+            >>> # Transform new data
+            >>> test_dtm = modeler.vectorizer.transform(test_texts)
+            >>> topic_distributions = modeler.transform(test_dtm)
+            >>> print(f"Top topic for first document: {topic_distributions[0].argmax()}")
         """
         if self.model is None:
             logger.error("Model not fitted. Call fit() first.")
@@ -418,13 +561,33 @@ class TopicModeler:
         else:
             logger.error(f"Transform not supported for method {self.method}")
             return None
-    
+        
     def save(self, path: str):
-        """
-        Save the topic modeler and model
+        """Save the topic modeler and model to disk.
+        
+        This method serializes the topic modeler's state and the fitted model
+        to the specified path. It saves two files:
+        1. A state file (.pkl) containing configuration and metadata
+        2. A model file (.pkl) containing the fitted model itself
+        
+        The saved model can later be loaded using the load() class method.
         
         Args:
-            path: Path to save the topic modeler
+            path (str): Base path where the topic modeler will be saved.
+                The method will append '_state.pkl' and '_model.pkl' to this path.
+                If the directory doesn't exist, it will be created.
+                
+        Raises:
+            OSError: If there's an error creating the directory or writing files
+            pickle.PicklingError: If the model cannot be serialized
+            
+        Example:
+            >>> modeler = TopicModeler(method='lda', num_topics=20)
+            >>> modeler.fit(dtm, feature_names=vocab)
+            >>> modeler.save('models/topics/financial_topics')
+            # Creates:
+            # - models/topics/financial_topics_state.pkl
+            # - models/topics/financial_topics_model.pkl
         """
         os.makedirs(os.path.dirname(path), exist_ok=True)
         
@@ -447,17 +610,40 @@ class TopicModeler:
             with open(f"{path}_model.pkl", 'wb') as f:
                 pickle.dump(self.model, f)
         
-        logger.info(f"Topic modeler saved to {path}")
+        logger.info(f"Topic modeler saved to {path}")    
+        
     @classmethod
     def load(cls, path: str) -> 'TopicModeler':
-        """
-        Load a topic modeler
+        """Load a previously saved topic modeler from disk.
+        
+        This class method reconstructs a TopicModeler instance from files
+        saved using the save() method. It loads both the state (configuration
+        and metadata) and the fitted model if available.
         
         Args:
-            path: Path to load the topic modeler from
+            path (str): Base path where the topic modeler was saved.
+                The method will append '_state.pkl' and '_model.pkl' to this path
+                to locate the saved files.
             
         Returns:
-            TopicModeler: Loaded topic modeler
+            TopicModeler: A new TopicModeler instance with the same configuration
+                and state as the saved one, including the fitted model if available.
+                
+        Raises:
+            FileNotFoundError: If the state file cannot be found
+            pickle.UnpicklingError: If there's an error deserializing the files
+            
+        Example:
+            >>> # Load a previously saved model
+            >>> modeler = TopicModeler.load('models/topics/financial_topics')
+            >>> # Use it to transform new documents
+            >>> new_dtm = vectorizer.transform(new_texts)
+            >>> topic_distributions = modeler.transform(new_dtm)
+            
+        Note:
+            If the model file is not found, the method will still return a
+            TopicModeler instance with the saved configuration, but without
+            a fitted model. You'll need to call fit() before using transform().
         """
         # Load state
         with open(f"{path}_state.pkl", 'rb') as f:
@@ -484,95 +670,3 @@ class TopicModeler:
             logger.warning(f"Model file not found at {path}_model.pkl")
         
         return instance
-
-
-# # Standalone functions for backward compatibility
-
-# def create_document_term_matrix(texts, save_path=None):
-#     """
-#     Create a document-term matrix from cleaned texts.
-#     Wrapper around TopicModeler's method for backward compatibility.
-    
-#     Args:
-#         texts: Cleaned text data
-#         save_path: Path to save the vectorizer
-        
-#     Returns:
-#         tuple: (document-term matrix, vectorizer object, feature names)
-#     """
-#     modeler = TopicModeler()
-#     return modeler.create_document_term_matrix(texts, save_path)
-
-# def tune_lda_topics(dtm, vocab, sample_size=2000, save_results=True, output_dir=None):
-#     """
-#     Tune LDA model by testing a range of topic counts.
-#     Wrapper around TopicModeler's method for backward compatibility.
-    
-#     Args:
-#         dtm: Document-term matrix
-#         vocab: List of vocabulary terms
-#         sample_size: Number of documents to sample for tuning
-#         save_results: Whether to save the tuning results
-#         output_dir: Directory to save results
-        
-#     Returns:
-#         dict: Records of coherence scores by topic count
-#     """
-#     modeler = TopicModeler()
-#     modeler.feature_names = vocab
-#     return modeler.optimize_num_topics(
-#         dtm, vocab, sample_size=sample_size, save_results=save_results, output_dir=output_dir
-#     )
-
-# def plot_topic_coherence(records, save_plot=True, output_dir=None):
-#     """
-#     Plot the topic coherence scores from LDA tuning.
-#     Wrapper around TopicModeler's method for backward compatibility.
-    
-#     Args:
-#         records: List of dictionaries with tuning results
-#         save_plot: Whether to save the plot
-#         output_dir: Directory to save the plot
-        
-#     Returns:
-#         tuple: (optimal topic count, plot)
-#     """
-#     modeler = TopicModeler()
-#     return modeler.plot_topic_coherence(records, save_plot=save_plot, output_dir=output_dir)
-
-# def fit_lda_model(dtm, n_topics=None, save_model=True, model_dir=None):
-#     """
-#     Fit the final LDA model with the optimal number of topics.
-#     Wrapper around TopicModeler's method for backward compatibility.
-    
-#     Args:
-#         dtm: Document-term matrix
-#         n_topics: Number of topics
-#         save_model: Whether to save the model
-#         model_dir: Directory to save the model
-        
-#     Returns:
-#         tuple: (LDA model, topic distribution matrix)
-#     """
-#     modeler = TopicModeler(num_topics=n_topics if n_topics is not None else 40)
-#     return modeler.fit(dtm, save_model=save_model, model_dir=model_dir)
-
-# def get_top_words(lda_model, vocab, n_words=10, save_results=True, output_dir=None):
-#     """
-#     Get the top words for each topic in the LDA model.
-#     Wrapper around TopicModeler's method for backward compatibility.
-    
-#     Args:
-#         lda_model: Fitted LDA model
-#         vocab: Vocabulary list
-#         n_words: Number of top words to extract per topic
-#         save_results: Whether to save the results
-#         output_dir: Directory to save the results
-        
-#     Returns:
-#         dict: Dictionary mapping topic indices to lists of top words
-#     """
-#     modeler = TopicModeler()
-#     modeler.model = lda_model
-#     modeler.feature_names = vocab
-#     return modeler.get_top_words(n_words=n_words, save_results=save_results, output_dir=output_dir)

@@ -1,7 +1,15 @@
 # config.py
-"""
-Configuration file for the NLP Earnings Report Analysis project.
-Contains paths, parameters and constants used throughout the project.
+"""Configuration file for the NLP Earnings Report Analysis project.
+
+This module contains all configuration settings for the project:
+- File paths and directory structure
+- Model parameters and hyperparameters
+- Feature extraction settings
+- Processing constants
+- Visualization parameters
+
+All project components import their configuration from here to ensure
+consistency across the pipeline.
 """
 
 import os

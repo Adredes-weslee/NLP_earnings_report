@@ -1,6 +1,18 @@
-"""
-Shared utility functions for test scripts.
-This module centralizes common functions used across different test scripts to avoid duplication.
+"""Shared utility functions for test scripts.
+
+This module centralizes common testing functions used across different test scripts
+to avoid duplication and ensure consistent testing procedures. It provides functions for:
+
+- Setting up standardized logging for test scripts
+- Loading processed data with optional sampling for faster testing
+- Testing the embedding processor functionality
+- Testing the sentiment analyzer
+- Testing topic modeling capabilities
+- Testing feature extraction pipelines
+- Testing model training workflows
+
+Each function is designed to be reusable and configurable to support both
+comprehensive testing and quick debugging with smaller data samples.
 """
 
 import os
@@ -30,15 +42,21 @@ from src.nlp.feature_extraction import FeatureExtractor
 logger = logging.getLogger('test_utils')
 
 def setup_logging(log_file: str, logger_name: str):
-    """
-    Set up logging configuration for test scripts
+    """Set up logging configuration for test scripts.
+    
+    Configures a logger with both file and console handlers to provide
+    comprehensive logging during test execution.
     
     Args:
-        log_file: Path to log file
-        logger_name: Name for the logger
+        log_file (str): Path to the log file where messages will be saved.
+        logger_name (str): Name for the logger instance, typically matching the test module.
     
     Returns:
-        logging.Logger: Configured logger
+        logging.Logger: Configured logger ready for use.
+    
+    Examples:
+        >>> logger = setup_logging('test_run.log', 'pipeline_test')
+        >>> logger.info("Starting test execution")
     """
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)
@@ -59,15 +77,35 @@ def setup_logging(log_file: str, logger_name: str):
     return logger
 
 def load_processed_data(data_version: str = None, sample_size: int = None):
-    """
-    Load processed data from a specific version or the latest version
+    """Load processed data from a specific version or the latest version.
+    
+    Retrieves preprocessed data splits from versioned datasets. If no version is specified,
+    uses the latest available version. If no processed data is found, falls back to
+    loading and minimally processing raw data.
     
     Args:
-        data_version: The specific data version to load
-        sample_size: If provided, limits the data to this number of samples for quick testing
+        data_version (str, optional): The specific data version ID to load. 
+            If None, loads the latest version.
+        sample_size (int, optional): If provided, limits the data to this number of samples
+            for quick testing. Test and validation sets will be reduced proportionally.
     
     Returns:
-        tuple: (train, val, test) DataFrames
+        tuple: A tuple containing three pandas DataFrames:
+            - train: Training data split
+            - val: Validation data split
+            - test: Testing data split
+    
+    Examples:
+        >>> # Load latest version with full data
+        >>> train, val, test = load_processed_data()
+        >>> print(f"Loaded {len(train)} training samples")
+        >>> 
+        >>> # Load specific version with reduced sample size for quick testing
+        >>> train, val, test = load_processed_data('v1.0', sample_size=1000)
+    
+    Notes:
+        If sample_size is provided, the validation and test sets are reduced to
+        approximately 1/5th of the sample_size to maintain proportions.
     """
     versioner = DataVersioner()
     
@@ -113,17 +151,34 @@ def load_processed_data(data_version: str = None, sample_size: int = None):
 
 def test_embedding_processor(train_df: pd.DataFrame, val_df: pd.DataFrame, 
                            max_features: int = 5000, model_dir: str = None):
-    """
-    Test the embedding processor with TF-IDF
+    """Test the embedding processor functionality with TF-IDF vectorization.
+    
+    Creates and evaluates an embedding processor using the TF-IDF method.
+    Fits the processor on training data and transforms both training and validation
+    data to generate document embeddings.
     
     Args:
-        train_df: Training data
-        val_df: Validation data
-        max_features: Maximum number of features for TF-IDF
-        model_dir: Directory to save the model
+        train_df (pd.DataFrame): Training data DataFrame containing text column.
+        val_df (pd.DataFrame): Validation data DataFrame containing text column.
+        max_features (int, optional): Maximum number of features (vocabulary size) for TF-IDF.
+            Default is 5000.
+        model_dir (str, optional): Directory to save the trained processor model.
+            If None, the model won't be saved.
         
     Returns:
-        tuple: (embedding processor, train_vectors, val_vectors)
+        tuple: A tuple containing three elements:
+            - processor (EmbeddingProcessor): The fitted embedding processor
+            - train_vectors (scipy.sparse.csr_matrix or numpy.ndarray): Vectorized training data
+            - val_vectors (scipy.sparse.csr_matrix or numpy.ndarray): Vectorized validation data
+    
+    Examples:
+        >>> processor, train_vecs, val_vecs = test_embedding_processor(
+        ...     train_df, val_df, max_features=10000, model_dir='models/embeddings')
+        >>> print(f"Embedding dimensionality: {train_vecs.shape[1]}")
+    
+    Notes:
+        Automatically detects whether to use 'ea_text' or 'clean_sent' as the text column
+        based on what's available in the DataFrame.
     """
     logger.info("Testing embedding processor...")
     
@@ -157,16 +212,33 @@ def test_embedding_processor(train_df: pd.DataFrame, val_df: pd.DataFrame,
 
 def test_sentiment_analyzer(train_df: pd.DataFrame, lexicon: str = 'loughran_mcdonald', 
                           model_dir: str = None):
-    """
-    Test the sentiment analyzer
+    """Test the sentiment analyzer functionality.
+    
+    Creates a sentiment analyzer using the specified lexicon and evaluates it on a
+    sample of documents from the training data. The Loughran-McDonald lexicon is
+    particularly suitable for financial text analysis.
     
     Args:
-        train_df: Training data
-        lexicon: Lexicon to use for sentiment analysis
-        model_dir: Directory to save the model
+        train_df (pd.DataFrame): Training data DataFrame containing a 'clean_sent' column
+            with preprocessed text.
+        lexicon (str, optional): Lexicon to use for sentiment analysis.
+            Default is 'loughran_mcdonald', which is specialized for financial texts.
+        model_dir (str, optional): Directory to save the sentiment analyzer.
+            If None, the analyzer won't be saved.
         
     Returns:
-        tuple: (sentiment analyzer, sentiment scores)
+        tuple: A tuple containing two elements:
+            - analyzer (SentimentAnalyzer): The configured sentiment analyzer
+            - sentiment_df (pd.DataFrame): DataFrame containing sentiment scores for the sample
+    
+    Examples:
+        >>> analyzer, results = test_sentiment_analyzer(train_df, model_dir='models/sentiment')
+        >>> print(f"Average positive sentiment: {results['positive'].mean():.4f}")
+        >>> print(f"Average negative sentiment: {results['negative'].mean():.4f}")
+    
+    Notes:
+        - Analysis is performed on a sample of up to 100 documents to save time
+        - Uses the 'clean_sent' column for text data
     """
     logger.info("Testing sentiment analyzer...")
     
@@ -196,17 +268,42 @@ def test_sentiment_analyzer(train_df: pd.DataFrame, lexicon: str = 'loughran_mcd
 
 def test_topic_modeling(train_df: pd.DataFrame, num_topics: int = 40, 
                       method: str = 'lda', model_dir: str = None):
-    """
-    Test topic modeling
+    """Test topic modeling functionality.
+    
+    Creates a topic model using the specified method and fits it on the training data.
+    Generates the document-term matrix, fits the topic model, and extracts the top words
+    for each discovered topic.
     
     Args:
-        train_df: Training data
-        num_topics: Number of topics to extract
-        method: Topic modeling method ('lda', 'nmf', or 'bertopic')
-        model_dir: Directory to save the model
+        train_df (pd.DataFrame): Training data DataFrame containing a 'clean_sent' column
+            with preprocessed text.
+        num_topics (int, optional): Number of topics to extract. Default is 40.
+            Higher values provide more granular topics but may lead to redundancy.
+        method (str, optional): Topic modeling method to use. Default is 'lda'.
+            Options include:
+            - 'lda': Latent Dirichlet Allocation (probabilistic)
+            - 'nmf': Non-negative Matrix Factorization (algebraic)
+            - 'bertopic': BERTopic (transformer-based)
+        model_dir (str, optional): Directory to save the topic model and related artifacts.
+            If None, nothing will be saved.
         
     Returns:
-        tuple: (topic modeler, document-term matrix, topic distributions, vocabulary)
+        tuple: A tuple containing four elements:
+            - modeler (TopicModeler): The fitted topic modeler
+            - dtm (scipy.sparse.csr_matrix): Document-term matrix
+            - topic_distributions (numpy.ndarray): Topic distributions for each document
+            - vocab (list): Vocabulary list
+    
+    Examples:
+        >>> modeler, dtm, distributions, vocab = test_topic_modeling(
+        ...     train_df, num_topics=20, method='lda', model_dir='models/topics')
+        >>> print(f"Number of documents: {distributions.shape[0]}")
+        >>> print(f"Number of topics: {distributions.shape[1]}")
+    
+    Notes:
+        - LDA works best with a sufficient number of topics (typically 10-100)
+        - Topic model training can be computationally intensive for large datasets
+        - Only the top 3 topics will be logged for quick inspection
     """
     logger.info(f"Testing topic modeling with {method}...")
     
@@ -241,18 +338,40 @@ def test_feature_extraction(train_df: pd.DataFrame, topic_modeler: TopicModeler 
                           sentiment_analyzer: SentimentAnalyzer = None,
                           embedding_processor: EmbeddingProcessor = None,
                           model_dir: str = None):
-    """
-    Test feature extraction
+    """Test the feature extraction pipeline.
+    
+    Creates and evaluates a feature extractor that combines multiple NLP components
+    (topic modeling, sentiment analysis, embeddings, and text metrics) into a unified
+    feature matrix suitable for machine learning.
     
     Args:
-        train_df: Training data
-        topic_modeler: Fitted topic modeler
-        sentiment_analyzer: Sentiment analyzer
-        embedding_processor: Embedding processor
-        model_dir: Directory to save the model
+        train_df (pd.DataFrame): Training data DataFrame with 'clean_sent' column.
+        topic_modeler (TopicModeler, optional): Fitted topic modeler. If None,
+            topic-based features won't be included.
+        sentiment_analyzer (SentimentAnalyzer, optional): Configured sentiment analyzer.
+            If None, sentiment features won't be included.
+        embedding_processor (EmbeddingProcessor, optional): Fitted embedding processor.
+            If None, embedding-based features won't be included.
+        model_dir (str, optional): Directory to save the feature extractor.
+            If None, the extractor won't be saved.
         
     Returns:
-        tuple: (feature extractor, feature matrix, feature names)
+        tuple: A tuple containing three elements:
+            - extractor (FeatureExtractor): The configured feature extractor
+            - features (numpy.ndarray): Combined feature matrix for training data
+            - feature_names (list): Names of all features in the matrix
+    
+    Examples:
+        >>> extractor, features, feature_names = test_feature_extraction(
+        ...     train_df, topic_modeler, sentiment_analyzer, embedding_processor,
+        ...     model_dir='models/features')
+        >>> print(f"Feature matrix shape: {features.shape}")
+        >>> print(f"Feature groups: {extractor.get_feature_groups().keys()}")
+    
+    Notes:
+        - Includes text metrics features by default
+        - Other feature types are only included if the corresponding component is provided
+        - Reports the number and types of features extracted
     """
     logger.info("Testing feature extraction...")
     
@@ -291,17 +410,52 @@ def test_feature_extraction(train_df: pd.DataFrame, topic_modeler: TopicModeler 
 
 def test_model_training(features: np.ndarray, targets: np.ndarray,
                       model_type: str = 'classifier', model_dir: str = None):
-    """
-    Test model training
+    """Test model training functionality.
+    
+    Trains and evaluates machine learning models using the specified features and targets.
+    Supports both regression (Lasso) and classification models, with options to train
+    either type or both.
     
     Args:
-        features: Feature matrix
-        targets: Target values
-        model_type: Type of model to train ('lasso', 'classifier', or 'all')
-        model_dir: Directory to save the model
+        features (np.ndarray): Feature matrix derived from NLP processing.
+        targets (np.ndarray): Target values for prediction:
+            - For regression: Continuous return values
+            - For classification: Binary labels (typically 0/1)
+        model_type (str, optional): Type of model to train. Default is 'classifier'.
+            Options:
+            - 'lasso': Train Lasso regression model for sparse feature selection
+            - 'classifier': Train various classifier models (LogisticRegression, SVM, etc.)
+            - 'all': Train both regression and classification models
+        model_dir (str, optional): Directory to save trained models.
+            If None, models won't be saved.
         
     Returns:
-        dict: Dictionary containing trained models and results
+        dict: Dictionary containing trained models and results with structure:
+            {
+                'lasso': {  # (only if model_type is 'lasso' or 'all')
+                    'model': trained_lasso_model,
+                    'results': lasso_training_metrics,
+                    'nonzero_topics': nonzero_feature_indices
+                },
+                'classifier': {  # (only if model_type is 'classifier' or 'all')
+                    'model': best_classifier_model,
+                    'results': classifier_training_metrics
+                }
+            }
+    
+    Examples:
+        >>> # Train a classifier model
+        >>> results = test_model_training(features, binary_targets, model_type='classifier')
+        >>> classifier = results['classifier']['model']
+        >>> metrics = results['classifier']['results']
+        >>> 
+        >>> # Train both model types
+        >>> results = test_model_training(features, continuous_targets, model_type='all')
+    
+    Notes:
+        - Uses the model_trainer module for the actual training process
+        - For classification, trains multiple models and returns the best performer
+        - For Lasso, performs hyperparameter tuning to find the optimal alpha
     """
     logger.info(f"Testing model training with {model_type}...")
     

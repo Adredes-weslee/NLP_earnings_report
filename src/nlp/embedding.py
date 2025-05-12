@@ -1,6 +1,15 @@
-"""
-Embedding processor for NLP Earnings Report project.
-Handles text embeddings using various models including transformers.
+"""Embedding processor for NLP Earnings Report project.
+
+This module provides utilities for converting raw text from earnings reports
+into numerical vector representations (embeddings) that can be used for 
+downstream machine learning tasks. It supports multiple embedding methods:
+
+- Bag-of-Words: Simple count-based document representations
+- TF-IDF: Term frequency-inverse document frequency weighting
+- Transformer models: Contextual embeddings from neural network models
+
+The main class, EmbeddingProcessor, handles the creation, storage, and 
+application of these embedding models in a unified interface.
 """
 
 import numpy as np
@@ -27,18 +36,39 @@ except ImportError:
 logger = logging.getLogger('embedding_processor')
 
 class EmbeddingProcessor:
-    """
-    Class for creating and managing text embeddings using various techniques.
-    Supports traditional bag-of-words, TF-IDF, and transformer-based embeddings.
+    """Class for creating and managing text embeddings using various techniques.
+    
+    This class provides tools to convert financial text documents into numerical
+    vector representations using different embedding techniques. It supports 
+    traditional methods like bag-of-words and TF-IDF, as well as modern 
+    transformer-based embeddings when available.
+    
+    Attributes:
+        method (str): The embedding method being used.
+        model_name (str): The name of the transformer model if applicable.
+        vectorizer: The vectorizer object for traditional embeddings.
+        transformer_model: The loaded transformer model if applicable.
+        tokenizer: The tokenizer associated with the transformer model.
+        embedding_dim (int): Dimensionality of the embedding vectors.
+        vocab (list): Vocabulary used for traditional embedding methods.
     """
     
     def __init__(self, method: str = 'tfidf', model_name: str = 'all-MiniLM-L6-v2'):
-        """
-        Initialize the embedding processor.
+        """Initialize the embedding processor with specified method and model.
         
         Args:
-            method: Embedding method ('bow', 'tfidf', 'transformer')
-            model_name: Name of transformer model (if method='transformer')
+            method (str): Embedding method to use. Options are:
+                'bow': Bag-of-Words representation
+                'tfidf': Term Frequency-Inverse Document Frequency
+                'transformer': Neural transformer-based embeddings
+                Defaults to 'tfidf'.
+            model_name (str): Name of transformer model to use if method is 'transformer'.
+                Defaults to 'all-MiniLM-L6-v2', a good balance of quality and speed.
+                
+        Example:
+            >>> processor = EmbeddingProcessor(method='tfidf')
+            >>> processor.fit(documents)
+            >>> embeddings = processor.transform(new_documents)
         """
         self.method = method
         self.model_name = model_name
@@ -54,18 +84,34 @@ class EmbeddingProcessor:
             logger.warning("Transformer method selected but libraries not available. "
                           "Install with: pip install transformers sentence-transformers")
             raise ImportError("Transformers library not available")
-            
+        
     def fit(self, texts: List[str], max_features: int = MAX_FEATURES, **kwargs) -> 'EmbeddingProcessor':
-        """
-        Fit the embedding model on the provided texts.
+        """Fit the embedding model on the provided texts.
+        
+        This method trains the embedding model on a corpus of documents.
+        For bag-of-words and TF-IDF, it builds the vocabulary and calculates
+        document frequencies. For transformer-based methods, it loads the
+        pre-trained model.
         
         Args:
-            texts: List of text documents
-            max_features: Maximum vocabulary size for BoW/TF-IDF (default from config)
-            **kwargs: Additional arguments for the vectorizer
+            texts (List[str]): List of text documents to fit the model on.
+            max_features (int, optional): Maximum vocabulary size for BoW/TF-IDF.
+                Defaults to MAX_FEATURES from config.
+            **kwargs: Additional arguments for the vectorizer or transformer model.
+                Common options include:
+                - ngram_range: Tuple specifying n-gram range
+                - stop_words: List of stop words or 'english'
+                - max_df: Maximum document frequency threshold
             
         Returns:
-            Self for method chaining
+            EmbeddingProcessor: Self for method chaining.
+            
+        Raises:
+            ValueError: If the texts provided are empty or not in the expected format.
+            
+        Example:
+            >>> processor = EmbeddingProcessor(method='tfidf')
+            >>> processor.fit(training_documents)
         """
         logger.info(f"Fitting {self.method} embedding model on {len(texts)} texts")
           # Prepare common kwargs with config values if not already provided
@@ -104,16 +150,30 @@ class EmbeddingProcessor:
                 raise
         
         return self
-    
     def transform(self, texts: List[str]) -> np.ndarray:
-        """
-        Transform texts to embeddings.
+        """Transform texts to embeddings using the fitted model.
+        
+        This method converts input texts to numerical embeddings using the
+        previously fit model. The output format depends on the embedding method:
+        - For 'bow' and 'tfidf': Returns sparse matrices
+        - For 'transformer': Returns dense matrices
         
         Args:
-            texts: List of text documents
+            texts (List[str]): List of text documents to transform into embeddings.
             
         Returns:
-            Embedding matrix of shape (n_samples, embedding_dim)
+            np.ndarray: Embedding matrix of shape (n_samples, embedding_dim)
+                where n_samples is the number of input texts and embedding_dim
+                is the dimensionality of the embedding space.
+                
+        Raises:
+            ValueError: If the model hasn't been fitted yet.
+            
+        Example:
+            >>> processor = EmbeddingProcessor(method='tfidf')
+            >>> processor.fit(training_documents)
+            >>> embeddings = processor.transform(test_documents)
+            >>> print(f"Embedding shape: {embeddings.shape}")
         """
         if not texts:
             logger.warning("Empty text list provided to transform()")
@@ -139,41 +199,88 @@ class EmbeddingProcessor:
                 embeddings.append(batch_embeddings)
                 
             return np.vstack(embeddings)
-    
+        
     def fit_transform(self, texts: List[str], max_features: int = 10000, **kwargs) -> np.ndarray:
-        """
-        Fit the model and transform the texts in one step.
+        """Fit the model and transform the texts in one step.
+        
+        This is a convenience method that calls fit() followed by transform()
+        in a single operation. It's equivalent to calling these methods separately
+        but may be more efficient for some embedding methods.
         
         Args:
-            texts: List of text documents
-            max_features: Maximum vocabulary size for BoW/TF-IDF
-            **kwargs: Additional arguments for the vectorizer
+            texts (List[str]): List of text documents to fit on and transform.
+            max_features (int, optional): Maximum vocabulary size for BoW/TF-IDF.
+                For 'bow' and 'tfidf' methods, this limits the size of the vocabulary.
+                Higher values capture more terms but increase dimensionality.
+                Defaults to 10000.
+            **kwargs: Additional arguments for the vectorizer or transformer.
+                Common options include:
+                - ngram_range: Tuple specifying n-gram range, e.g. (1, 2) for unigrams and bigrams
+                - min_df: Minimum document frequency threshold for terms
+                - stop_words: List of stop words or 'english' to use built-in list
             
         Returns:
-            Embedding matrix
+            np.ndarray: Embedding matrix of shape (n_samples, embedding_dim).
+                For 'bow' and 'tfidf', this is typically a sparse matrix.
+                For 'transformer', this is a dense matrix.
+            
+        Example:
+            >>> processor = EmbeddingProcessor(method='tfidf')
+            >>> embeddings = processor.fit_transform(documents)
+            >>> print(f"Embedding shape: {embeddings.shape}")
+            
+        Note:
+            For large datasets with 'transformer' method, this operation may be
+            memory-intensive. Consider using fit() and transform() separately with
+            batching for very large datasets.
         """
         self.fit(texts, max_features, **kwargs)
         return self.transform(texts)
     
     def get_document_embeddings(self, df: pd.DataFrame, text_col: str) -> np.ndarray:
-        """
-        Get document embeddings for texts in a dataframe column.
+        """Get document embeddings for texts in a dataframe column.
+        
+        This is a convenience method that extracts text from a dataframe column
+        and transforms it into embeddings. It handles null values by replacing 
+        them with empty strings.
         
         Args:
-            df: DataFrame containing the texts
-            text_col: Name of column containing text
+            df (pd.DataFrame): DataFrame containing the texts to embed.
+            text_col (str): Name of the column containing the text data.
             
         Returns:
-            Document embedding matrix
+            np.ndarray: Document embedding matrix with shape (len(df), embedding_dim).
+            
+        Raises:
+            KeyError: If the specified text_col doesn't exist in the dataframe.
+            
+        Example:
+            >>> processor = EmbeddingProcessor(method='tfidf')
+            >>> processor.fit(training_documents)
+            >>> embeddings = processor.get_document_embeddings(test_df, 'text_column')
         """
         texts = df[text_col].fillna('').tolist()
-        return self.transform(texts)
+        return self.transform(texts)    
+    
     def save(self, path: str = None) -> None:
-        """
-        Save the embedding model to disk.
+        """Save the embedding model to disk.
+        
+        This method serializes the embedding model and its configuration
+        to the specified directory. For traditional models like TF-IDF,
+        it saves the vectorizer. For transformer models, it saves the
+        model configuration and a reference to the pre-trained model.
         
         Args:
-            path: Directory path to save model. If None, uses EMBEDDING_MODEL_PATH from config
+            path (str, optional): Directory path to save the model.
+                If None, uses EMBEDDING_MODEL_PATH from config.
+                
+        Raises:
+            OSError: If there's an error creating the directory or writing files.
+            
+        Example:
+            >>> processor = EmbeddingProcessor(method='tfidf')
+            >>> processor.fit(documents)
+            >>> processor.save('models/embeddings/tfidf_model/')
         """
         if path is None:
             path = EMBEDDING_MODEL_PATH
@@ -198,17 +305,30 @@ class EmbeddingProcessor:
             with open(os.path.join(path, 'transformer_model.txt'), 'w') as f:
                 f.write(self.model_name)
         
-        logger.info(f"Model saved to {path}")
+        logger.info(f"Model saved to {path}")    
+    
     @classmethod
     def load(cls, path: str = None) -> 'EmbeddingProcessor':
-        """
-        Load an embedding model from disk.
+        """Load an embedding model from disk.
+        
+        This class method reconstructs an EmbeddingProcessor instance from
+        saved files. It loads the configuration and model components from
+        the specified directory.
         
         Args:
-            path: Directory path to load model from. If None, uses EMBEDDING_MODEL_PATH from config
+            path (str, optional): Directory path to load the model from.
+                If None, uses EMBEDDING_MODEL_PATH from config.
             
         Returns:
-            Loaded EmbeddingProcessor instance
+            EmbeddingProcessor: A loaded instance with the saved configuration
+                and model components.
+                
+        Raises:
+            FileNotFoundError: If the model files cannot be found at the specified path.
+            
+        Example:
+            >>> processor = EmbeddingProcessor.load('models/embeddings/tfidf_model/')
+            >>> embeddings = processor.transform(new_documents)
         """
         if path is None:
             path = EMBEDDING_MODEL_PATH

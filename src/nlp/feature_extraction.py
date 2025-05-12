@@ -34,9 +34,26 @@ except ImportError:
 logger = logging.getLogger('feature_extractor')
 
 class FeatureExtractor:
-    """
-    Unified feature extractor for financial text analysis.
-    Combines topic modeling, sentiment analysis, NER, and financial metric extraction.
+    """Unified feature extractor for financial text analysis.
+    
+    This class combines multiple NLP techniques to extract structured features 
+    from unstructured financial texts. It integrates topic modeling, sentiment analysis,
+    named entity recognition (NER), and financial metric extraction into a unified
+    feature extraction pipeline.
+    
+    Attributes:
+        use_topics (bool): Whether to include topic-based features.
+        use_sentiment (bool): Whether to include sentiment-based features.
+        use_metrics (bool): Whether to include extracted financial metrics.
+        use_embeddings (bool): Whether to include text embeddings.
+        use_spacy (bool): Whether to use spaCy for named entity recognition.
+        use_transformers (bool): Whether to use transformer models.
+        model_name (str): Name of the model to use (spaCy or transformer).
+        topic_model: Topic modeling component (set using set_topic_model).
+        sentiment_analyzer: Sentiment analysis component (set using set_sentiment_analyzer).
+        embedding_model: Embedding model component (set using set_embedding_model).
+        feature_names (list): Names of extracted features.
+        feature_importance (dict): Feature importance scores.
     """
     
     def __init__(self, 
@@ -47,17 +64,24 @@ class FeatureExtractor:
                  use_spacy: bool = True, 
                  use_transformers: bool = False,
                  model_name: str = "en_core_web_sm"):
-        """
-        Initialize the feature extractor.
+        """Initialize the feature extractor with specified components.
         
         Args:
-            use_topics: Whether to include topic features
-            use_sentiment: Whether to include sentiment features
-            use_metrics: Whether to include extracted financial metrics
-            use_embeddings: Whether to include text embeddings
-            use_spacy: Whether to use spaCy for NER
-            use_transformers: Whether to use transformers for advanced NER
-            model_name: Name of spaCy model or transformer model to use
+            use_topics (bool): Whether to include topic features. Defaults to True.
+            use_sentiment (bool): Whether to include sentiment features. Defaults to True.
+            use_metrics (bool): Whether to include extracted financial metrics. 
+                Defaults to True.
+            use_embeddings (bool): Whether to include text embeddings. Defaults to False.
+            use_spacy (bool): Whether to use spaCy for NER. Defaults to True.
+            use_transformers (bool): Whether to use transformers for advanced NER. 
+                Defaults to False.
+            model_name (str): Name of spaCy model or transformer model to use. 
+                Defaults to "en_core_web_sm".
+                
+        Example:
+            >>> extractor = FeatureExtractor(use_embeddings=True)
+            >>> extractor.set_topic_model(topic_model)
+            >>> features, feature_names = extractor.extract_features(df, 'text_column')
         """
         self.use_topics = use_topics
         self.use_sentiment = use_sentiment
@@ -85,8 +109,18 @@ class FeatureExtractor:
                   f"sentiment={use_sentiment}, metrics={use_metrics}, embeddings={use_embeddings}")
         
     def load_spacy_model(self):
-        """
-        Load the spaCy NLP model for named entity recognition.
+        """Load the spaCy NLP model for named entity recognition.
+        
+        This method loads the specified spaCy model for use in named entity
+        recognition tasks if use_spacy is set to True. If successful, 
+        it will set the nlp attribute to the loaded model.
+        
+        Returns:
+            None
+            
+        Raises:
+            ImportError: If spaCy is not installed.
+            OSError: If the specified model is not found.
         """
         if not self.use_spacy:
             return
@@ -114,14 +148,35 @@ class FeatureExtractor:
             self.use_transformers = False
     
     def extract_financial_metrics(self, text: str) -> Dict[str, float]:
-        """
-        Extract financial metrics and ratios from text using regex patterns.
+        """Extract financial metrics and ratios from text using regex patterns.
+        
+        This method scans financial text for common financial metrics and values
+        using regular expression patterns. It can identify numerical values with
+        their associated units (millions, billions, percentages) and contextual
+        information (revenue, margins, growth rates, etc.).
         
         Args:
-            text (str): Input financial text
+            text (str): Input financial text to analyze. This should be a string
+                containing earnings report content or other financial information.
             
         Returns:
-            dict: Dictionary of extracted financial metrics
+            Dict[str, float]: Dictionary mapping extracted metric names to their
+                numerical values. Keys include standardized metric names like
+                'revenue_million', 'gross_margin', 'eps', etc. If multiple instances
+                of the same metric are found, they'll be numbered (e.g., 'revenue_1',
+                'revenue_2').
+                
+        Example:
+            >>> metrics = extractor.extract_financial_metrics(
+            ...     "Revenue was $5.2 billion, with a gross margin of 42.5%"
+            ... )
+            >>> print(metrics)
+            {'revenue_billion': 5.2, 'gross_margin': 42.5}
+            
+        Note:
+            This method uses simple regex patterns and may miss complex phrasings
+            or infer incorrect values in ambiguous text. For production use,
+            consider supplementing with more sophisticated NLP extraction.
         """
         if not isinstance(text, str):
             return {}
@@ -322,15 +377,44 @@ class FeatureExtractor:
         return embeddings, feature_names
     
     def extract_features(self, df, text_column='text') -> Tuple[np.ndarray, List[str]]:
-        """
-        Extract all features from text data.
+        """Extract all enabled features from text data in a DataFrame.
+        
+        This is the main method for extracting features from text data. It combines
+        all enabled feature extraction techniques (topics, sentiment, metrics, 
+        embeddings) into a single feature matrix with labeled features.
         
         Args:
-            df: DataFrame containing text data
-            text_column: Name of column containing text
+            df (pd.DataFrame): DataFrame containing the text data to analyze.
+                Should have at least one column with text content.
+            text_column (str, optional): Name of the column containing the text
+                to analyze. Defaults to 'text'.
             
         Returns:
-            tuple: (feature matrix, feature names)
+            Tuple[np.ndarray, List[str]]: A tuple containing:
+                - Feature matrix as numpy array with shape (n_samples, n_features)
+                - List of feature names corresponding to each column in the matrix
+                
+        Raises:
+            ValueError: If no features are extracted due to missing models or
+                if all feature types are disabled
+            KeyError: If text_column doesn't exist in the DataFrame
+            
+        Example:
+            >>> # Create a feature extractor with all features enabled
+            >>> extractor = FeatureExtractor(
+            ...     use_topics=True,
+            ...     use_sentiment=True,
+            ...     use_metrics=True
+            ... )
+            >>> # Set required models
+            >>> extractor.set_topic_model(topic_model)
+            >>> extractor.set_sentiment_analyzer(sentiment_analyzer)
+            >>> # Extract features from a DataFrame
+            >>> features, feature_names = extractor.extract_features(
+            ...     df,
+            ...     text_column='earnings_text'
+            ... )
+            >>> print(f"Extracted {features.shape[1]} features")
         """
         texts = df[text_column].fillna('').tolist()
         features = []
@@ -465,14 +549,36 @@ class FeatureExtractor:
         return self
     
     def get_top_features(self, n=20):
-        """
-        Get the top n most important features.
+        """Retrieve the top n most important features by absolute importance.
+        
+        This method returns the most predictive features based on their importance
+        scores (as set by set_feature_importances()). Features are sorted by their
+        absolute importance values, allowing both positive and negative features
+        to be identified as important.
         
         Args:
-            n: Number of top features to return
+            n (int, optional): Number of top features to return. Defaults to 20.
             
         Returns:
-            pandas.DataFrame: DataFrame with feature names and importance values
+            pd.DataFrame: DataFrame with columns:
+                - 'feature': Name of the feature
+                - 'importance': Importance score of the feature
+                Sorted by absolute importance (descending order)
+                
+        Note:
+            This method requires feature importances to be previously set using
+            the set_feature_importances() method. Otherwise, it will return an
+            empty DataFrame.
+            
+        Example:
+            >>> # Assume feature importances already set from model training
+            >>> top_features = extractor.get_top_features(n=10)
+            >>> print(top_features)
+               feature    importance
+            0  topic_5      0.453
+            1  sentiment_positive  0.329
+            2  sentiment_negative -0.287
+            ...
         """
         if not self.feature_importance:
             logger.warning("Feature importances not set. Use set_feature_importances first.")
@@ -492,11 +598,31 @@ class FeatureExtractor:
         return importance_df
     
     def get_feature_groups(self) -> Dict[str, List[str]]:
-        """
-        Get groups of features organized by type.
+        """Organize extracted features into logical groups by type.
+        
+        This method categorizes the extracted features into semantic groups
+        based on their prefixes and content. This is useful for understanding
+        which features belong to which analysis types (sentiment, topics, etc.)
+        and for feature selection or visualization purposes.
         
         Returns:
-            Dictionary mapping feature group names to lists of feature names
+            Dict[str, List[str]]: Dictionary mapping feature group names to lists
+                of feature names. Possible groups include:
+                - 'sentiment': Sentiment analysis features
+                - 'topics': Topic modeling features
+                - 'financial': Extracted financial metrics
+                - 'readability': Text readability metrics
+                - 'entities': Named entity features
+                - 'embeddings': Text embedding features
+                Empty groups are excluded from the result.
+                
+        Example:
+            >>> feature_groups = extractor.get_feature_groups()
+            >>> for group_name, features in feature_groups.items():
+            ...     print(f"{group_name}: {len(features)} features")
+            sentiment: 6 features
+            topics: 30 features
+            financial: 12 features
         """
         feature_groups = {
             'sentiment': [],
@@ -526,15 +652,27 @@ class FeatureExtractor:
         return {k: v for k, v in feature_groups.items() if v}
     
     def plot_feature_importance(self, n=20, figsize=(12, 10)):
-        """
-        Plot feature importances.
+        """Create a horizontal bar chart of feature importances.
+        
+        This method visualizes the top n most important features as a horizontal
+        bar chart, with positive importances in blue and negative importances in red.
+        Feature importances must have been previously set using set_feature_importances().
         
         Args:
-            n: Number of top features to show
-            figsize: Figure size
+            n (int, optional): Number of top features to show in the plot.
+                Defaults to 20.
+            figsize (tuple, optional): Figure size as (width, height) in inches.
+                Defaults to (12, 10).
             
         Returns:
-            matplotlib.figure.Figure: Figure object
+            matplotlib.figure.Figure: The generated figure object that can be
+                displayed or saved.
+                
+        Example:
+            >>> # Assume feature importances already set
+            >>> fig = extractor.plot_feature_importance(n=15)
+            >>> fig.savefig('feature_importances.png', dpi=300, bbox_inches='tight')
+            >>> plt.show()
         """
         top_features = self.get_top_features(n)
         
@@ -547,13 +685,34 @@ class FeatureExtractor:
         plt.tight_layout()
         
         return plt.gcf()
-        
+    
     def save(self, path=None):
-        """
-        Save the feature extractor.
+        """Save the feature extractor configuration and state to disk.
+        
+        This method serializes the feature extractor's configuration settings,
+        feature names, and importance scores to a file on disk. It does not save
+        the associated models (topic model, sentiment analyzer, etc.) - these
+        must be saved separately.
         
         Args:
-            path: Path to save the feature extractor. If None, use default from config.
+            path (str, optional): Path where the feature extractor will be saved.
+                If None, uses the default path from config (FEATURE_EXTRACTOR_PATH).
+                Defaults to None.
+                
+        Raises:
+            OSError: If there's an error creating the directory or writing the file
+            pickle.PicklingError: If the feature extractor cannot be serialized
+            
+        Example:
+            >>> extractor = FeatureExtractor(use_topics=True, use_sentiment=True)
+            >>> # Set up models and extract features
+            >>> # ...
+            >>> extractor.save('models/features/financial_features')
+            
+        Note:
+            To fully restore a feature extractor, you'll need to reload any
+            associated models (topic model, sentiment analyzer, etc.) and set
+            them using the appropriate methods after loading.
         """
         if path is None:
             path = FEATURE_EXTRACTOR_PATH
@@ -586,14 +745,33 @@ class FeatureExtractor:
         
     @classmethod
     def load(cls, path=None):
-        """
-        Load a feature extractor.
+        """Load a previously saved feature extractor from disk.
+        
+        This class method reconstructs a FeatureExtractor instance from a saved
+        configuration file. It loads the feature extractor's settings, feature names,
+        and importance scores, but NOT the associated models (topic model,
+        sentiment analyzer, etc.) - these must be loaded and set separately.
         
         Args:
-            path: Path to load the feature extractor from. If None, use default from config.
+            path (str, optional): Path to the file containing the saved feature extractor.
+                If None, uses the default path from config (FEATURE_EXTRACTOR_PATH).
+                Defaults to None.
             
         Returns:
-            FeatureExtractor: Loaded feature extractor
+            FeatureExtractor: A new FeatureExtractor instance with the saved
+                configuration and state.
+                
+        Raises:
+            FileNotFoundError: If the saved file cannot be found
+            pickle.UnpicklingError: If there's an error deserializing the file
+            
+        Example:
+            >>> # Load a previously saved feature extractor
+            >>> extractor = FeatureExtractor.load('models/features/financial_features')
+            >>> 
+            >>> # You'll need to reload and set associated models
+            >>> extractor.set_topic_model(topic_model)
+            >>> extractor.set_sentiment_analyzer(sentiment_analyzer)
         """
         if path is None:
             path = FEATURE_EXTRACTOR_PATH

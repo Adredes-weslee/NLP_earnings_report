@@ -1,6 +1,16 @@
-"""
-Test script for the enhanced NLP module with configurable sample size.
-This version allows running tests on a smaller sample for faster debugging.
+"""Test script for the enhanced NLP module with configurable sample size.
+
+This script provides a lightweight version of the NLP testing suite that can
+run on a reduced dataset size for faster debugging and development iterations.
+It tests all key NLP components including:
+
+- Embedding generation with TF-IDF vectorization
+- Sentiment analysis using financial lexicons
+- Topic modeling with LDA (reduced number of topics)
+- Combined feature extraction from all NLP components
+
+The script supports configuration via command-line arguments to adjust sample size,
+features, and topic count for testing efficiency.
 """
 
 import os
@@ -47,12 +57,28 @@ logging.basicConfig(
 logger = logging.getLogger('advanced_nlp_quick_test')
 
 def load_processed_data(data_version=None, sample_size=None):
-    """
-    Load processed data from a specific version or the latest version
+    """Load processed data from a specific version or the latest version.
+    
+    Retrieves versioned data splits for NLP processing and optionally limits
+    the dataset size for quicker testing iterations.
     
     Args:
-        data_version: The specific data version to load
-        sample_size: If provided, limits the data to this number of samples for quick testing
+        data_version (str, optional): The specific data version ID to load.
+            If None, attempts to load the latest version.
+        sample_size (int, optional): If provided, limits the data to this number
+            of samples for quick testing. Validation and test sets are sized
+            proportionally smaller.
+    
+    Returns:
+        tuple: A tuple containing three pandas DataFrames:
+            - train_df: Training dataset with features and labels
+            - val_df: Validation dataset
+            - test_df: Test dataset
+    
+    Notes:
+        - If no data version exists, an appropriate error will be logged
+        - When sample_size is specified, random sampling is used to select records
+        - Ensures all data splits have the required columns for NLP processing
     """
     from src.data.data_versioner import DataVersioner
     
@@ -87,7 +113,26 @@ def load_processed_data(data_version=None, sample_size=None):
     return train_df, val_df, test_df
 
 def test_embedding_processor(train_df, val_df, max_features=5000):
-    """Test the enhanced embedding processor"""
+    """Test the enhanced embedding processor with reduced feature count.
+    
+    Creates and evaluates a TF-IDF embedding processor with configurable
+    feature count for faster testing. The processor is fitted on training data
+    and then used to transform both training and validation texts.
+    
+    Args:
+        train_df (pd.DataFrame): Training data DataFrame with 'ea_text' column
+        val_df (pd.DataFrame): Validation data DataFrame with 'ea_text' column
+        max_features (int, optional): Maximum number of features for TF-IDF
+            vectorization. Defaults to 5000 but can be reduced for quicker testing.
+    
+    Returns:
+        EmbeddingProcessor: The fitted embedding processor ready for text vectorization
+    
+    Notes:
+        - Handles missing text values by filling with empty strings
+        - Saves the model to 'models/embeddings/tfidf_5000' for reuse
+        - Reports embedding dimensions for both training and validation sets
+    """
     logger.info("Testing embedding processor...")
     
     # Create embedding processor with TF-IDF
@@ -112,7 +157,23 @@ def test_embedding_processor(train_df, val_df, max_features=5000):
     return embedding_processor
 
 def test_sentiment_analyzer(train_df):
-    """Test the sentiment analyzer"""
+    """Test the sentiment analyzer with financial lexicon.
+    
+    Creates a sentiment analyzer using the Loughran-McDonald financial lexicon
+    and analyzes a sample of earnings report texts to extract sentiment metrics.
+    
+    Args:
+        train_df (pd.DataFrame): Training data DataFrame with 'ea_text' column
+            containing earnings announcement text
+    
+    Returns:
+        SentimentAnalyzer: The configured sentiment analyzer with financial lexicon
+    
+    Notes:
+        - Analyzes only the first 100 samples (or fewer) for efficiency
+        - Reports key sentiment metrics: positive, negative, and net sentiment
+        - Saves the analyzer to 'models/sentiment/loughran_mcdonald' for reuse
+    """
     logger.info("Testing sentiment analyzer...")
     
     # Create sentiment analyzer with Loughran-McDonald lexicon
@@ -138,7 +199,28 @@ def test_sentiment_analyzer(train_df):
     return sentiment_analyzer
 
 def test_topic_modeling(train_df, embedding_processor, num_topics=10):
-    """Test the topic modeling capabilities with reduced complexity for quick testing"""
+    """Test the topic modeling capabilities with reduced complexity for quick testing.
+    
+    Creates and fits a topic model with a significantly reduced number of topics
+    for faster testing. Uses the document-term matrix from the embedding processor
+    to avoid redundant vectorization.
+    
+    Args:
+        train_df (pd.DataFrame): Training data DataFrame with 'ea_text' column
+        embedding_processor (EmbeddingProcessor): Fitted embedding processor that
+            contains the vectorizer for generating document-term matrices
+        num_topics (int, optional): Number of topics to generate. Defaults to 10,
+            which is much lower than production use but suitable for quick testing.
+    
+    Returns:
+        TopicModeler: The fitted topic model with extracted topics
+    
+    Notes:
+        - Reuses the vectorizer from the embedding processor for efficiency
+        - Skips hyperparameter optimization to speed up testing
+        - Prints top terms for each topic for quick inspection
+        - Saves the model to 'models/topics/quick_test/lda_model' for reuse
+    """
     logger.info("Testing topic modeling...")
     
     # Get document-term matrix from embedding processor
@@ -183,7 +265,30 @@ def test_topic_modeling(train_df, embedding_processor, num_topics=10):
     return topic_modeler
 
 def test_feature_extraction(train_df, val_df, embedding_processor, sentiment_analyzer, topic_modeler):
-    """Test the combined feature extraction"""
+    """Test the combined feature extraction pipeline.
+    
+    Creates a feature extractor that integrates multiple NLP components (embeddings,
+    topic modeling, and sentiment analysis) into a unified feature matrix for
+    machine learning models.
+    
+    Args:
+        train_df (pd.DataFrame): Training data DataFrame with 'ea_text' column and target variables
+        val_df (pd.DataFrame): Validation data DataFrame with 'ea_text' column
+        embedding_processor (EmbeddingProcessor): Fitted embedding processor for text vectorization
+        sentiment_analyzer (SentimentAnalyzer): Configured sentiment analyzer
+        topic_modeler (TopicModeler): Fitted topic model
+    
+    Returns:
+        FeatureExtractor: The configured feature extractor that combines all NLP components
+    
+    Notes:
+        - Configures the feature extractor to use all available NLP components
+        - Extracts features from both training and validation data
+        - Reports feature matrix dimensions and feature group information
+        - Ensures feature alignment between training and validation sets
+        - Prepares target variables for both regression and classification tasks
+        - Attempts to save the feature extractor configuration for reproducibility
+    """
     logger.info("Testing feature extraction...")
     
     # Create feature extractor with the desired settings upfront
@@ -332,13 +437,36 @@ def test_feature_extraction(train_df, val_df, embedding_processor, sentiment_ana
     return feature_extractor
 
 def run_advanced_nlp_test(sample_size=100, max_features=100, num_topics=2):
-    """
-    Run the full advanced NLP test pipeline with configurable parameters for quick testing
+    """Run the full advanced NLP test pipeline with configurable parameters for quick testing.
+    
+    Executes the entire NLP pipeline with reduced parameters suitable for quick testing
+    and development iterations. The function creates minimal versions of all components
+    (embeddings, sentiment analysis, topic modeling, feature extraction) to verify
+    the overall workflow without the computational cost of full-scale processing.
     
     Args:
-        sample_size: Number of samples to use (default: 100)
-        max_features: Maximum number of features for embeddings (default: 100)
-        num_topics: Number of topics for topic modeling (default: 2)
+        sample_size (int, optional): Number of data samples to use. Defaults to 100,
+            which is sufficient to test pipeline functionality while remaining fast.
+        max_features (int, optional): Maximum number of features for embeddings.
+            Defaults to 100, significantly reduced from production settings.
+        num_topics (int, optional): Number of topics for topic modeling.
+            Defaults to 2, which is minimal but sufficient for testing.
+    
+    Returns:
+        bool: True if all tests completed successfully, False otherwise
+    
+    Examples:
+        >>> # Run test with default quick settings
+        >>> success = run_advanced_nlp_test()
+        >>> 
+        >>> # Run with slightly larger parameters for more realistic testing
+        >>> success = run_advanced_nlp_test(sample_size=500, max_features=1000, num_topics=10)
+    
+    Notes:
+        - Creates necessary directory structure for models and results
+        - All parameters are dramatically reduced from production settings
+        - The quick test focuses on validating pipeline functionality, not model quality
+        - Models are saved to allow inspection after testing
     """
     # Create necessary directories
     os.makedirs('models', exist_ok=True)

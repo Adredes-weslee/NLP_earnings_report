@@ -1,5 +1,15 @@
-"""
-Test script for the enhanced data pipeline.
+"""Test script for the enhanced data pipeline.
+
+This script tests the complete data pipeline functionality including:
+- Data loading and preprocessing
+- Text cleaning and standardization
+- Data splitting into train/validation/test sets
+- Data versioning for reproducibility
+- Output file generation
+
+The test verifies that the pipeline correctly processes the raw data and
+produces the expected output files with appropriate versioning information.
+Debug information is printed to help diagnose import or path issues.
 """
 
 import os
@@ -70,7 +80,26 @@ logging.basicConfig(
 logger = logging.getLogger('pipeline_test')
 
 def test_data_pipeline():
-    """Test the data pipeline functionality"""
+    """Test the data pipeline functionality.
+    
+    Executes the complete data pipeline process:
+    1. Verifies the input data file exists
+    2. Initializes the DataPipeline with test configuration
+    3. Executes the pipeline to process the data
+    4. Registers the processed data version with DataVersioner
+    5. Verifies that all expected output files were created
+    
+    Returns:
+        tuple: A tuple containing:
+            - success (bool): True if the test completed successfully, False otherwise
+            - pipeline (DataPipeline or None): The pipeline instance if successful, None if failed
+    
+    Notes:
+        - Uses fixed random_state=42 for reproducibility
+        - Configures 20% test data and 15% validation data
+        - Logs information about the data splits and processing steps
+        - Registers the data version with a test description
+    """
     
     # Test input file path
     data_path = RAW_DATA_PATH

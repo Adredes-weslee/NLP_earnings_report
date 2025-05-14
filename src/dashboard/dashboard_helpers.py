@@ -19,7 +19,7 @@ Examples:
     >>> topic_explorer = create_topic_explorer(topic_model)
     >>> prediction_simulator = create_prediction_simulator(models, sample_text)
 """
-
+import glob
 import os
 import sys
 import logging
@@ -33,17 +33,10 @@ from typing import Dict, List, Any, Tuple, Optional
 from datetime import datetime
 from wordcloud import WordCloud
 
-
-
 # Import configuration values
 from ..config import (MODEL_DIR, OUTPUT_DIR, PROCESSED_DATA_DIR, 
                   EMBEDDING_MODEL_PATH, SENTIMENT_MODEL_PATH, TOPIC_MODEL_PATH,
                   FEATURE_EXTRACTOR_PATH, MAX_WORD_CLOUD_WORDS, FIGURE_DPI)
-
-# The environment variable is now set in app.py
-# This comment is kept for reference
-
-logger = logging.getLogger('dashboard.utils')
 
 # Import NLP components
 from ..nlp.embedding import EmbeddingProcessor
@@ -51,6 +44,7 @@ from ..nlp.sentiment import SentimentAnalyzer
 from ..nlp.topic_modeling import TopicModeler
 from ..nlp.feature_extraction import FeatureExtractor
 
+logger = logging.getLogger('dashboard.utils')
 
 def load_models() -> Dict[str, Any]:
     """Load all available models for the dashboard application.
@@ -110,7 +104,7 @@ def load_models() -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"Failed to load topic model: {str(e)}")
         
-        # In dashboard_helpers.py, within the load_models() function:
+        # Try to load feature extractor
         try:
             feature_path = FEATURE_EXTRACTOR_PATH
             models['feature_extractor'] = FeatureExtractor.load(feature_path)
@@ -119,11 +113,9 @@ def load_models() -> Dict[str, Any]:
             # Try alternative paths with timestamp suffixes
             logger.warning(f"Failed to load feature extractor from primary path: {str(e)}")
             try:
-                import glob
-                import os
                 feature_dir = os.path.dirname(FEATURE_EXTRACTOR_PATH)
                 feature_base = os.path.basename(FEATURE_EXTRACTOR_PATH)
-                alternative_paths = glob.glob(f"{feature_dir}/{feature_base}_*")
+                alternative_paths = glob.glob(os.path.join(feature_dir, f"{feature_base}_*"))
                 
                 if alternative_paths:
                     # Sort by modification time to get the newest
@@ -137,8 +129,6 @@ def load_models() -> Dict[str, Any]:
         
         # Try to load sample data
         try:
-            # Get most recent training data from processed directory
-            import glob
             train_files = glob.glob(os.path.join(PROCESSED_DATA_DIR, "train_*.csv"))
             if train_files:
                 # Sort by modification time and get the most recent
@@ -192,71 +182,41 @@ def get_available_models() -> Dict[str, List[Dict[str, Any]]]:
         'feature_extractor': []
     }
     
-    # In a real application, this would search a models directory
-    # For now, we'll add some demo models
+    # Add only the models that actually exist in your implementation
     
-    # Add embedding models
+    # Add embedding model
     model_types['embedding'].append({
-        'name': 'FinBERT Embeddings',
-        'description': 'Financial domain-specific BERT embeddings',
+        'name': 'TF-IDF Embeddings',
+        'description': 'Text vectorization using TF-IDF with 5000 features',
         'version': '1.0.0',
-        'created_at': '2023-10-15'
+        'created_at': datetime.now().strftime('%Y-%m-%d')
     })
     
-    model_types['embedding'].append({
-        'name': 'Sentence Transformer',
-        'description': 'General purpose sentence embeddings',
-        'version': '2.0.0',
-        'created_at': '2023-11-22'
-    })
-    
-    # Add sentiment models
+    # Add sentiment model
     model_types['sentiment'].append({
-        'name': 'Financial Lexicon Analyzer',
-        'description': 'Finance-specific sentiment lexicon',
-        'version': '1.2.0',
-        'created_at': '2023-09-05'
+        'name': 'Loughran-McDonald Lexicon',
+        'description': 'Finance-specific sentiment lexicon with positive/negative/uncertainty scores',
+        'version': '1.0.0',
+        'created_at': datetime.now().strftime('%Y-%m-%d')
     })
     
-    model_types['sentiment'].append({
-        'name': 'Earnings Report Sentiment',
-        'description': 'Fine-tuned BERT model for earnings sentiment',
-        'version': '0.9.1',
-        'created_at': '2023-12-10'
-    })
-    
-    # Add topic models
+    # Add topic model
     model_types['topic'].append({
         'name': 'LDA Topic Model',
-        'description': 'Latent Dirichlet Allocation model with 20 topics',
+        'description': 'Latent Dirichlet Allocation model for topic extraction',
         'version': '1.0.0',
-        'created_at': '2023-08-18'
+        'created_at': datetime.now().strftime('%Y-%m-%d')
     })
     
-    model_types['topic'].append({
-        'name': 'BERTopic Model',
-        'description': 'BERT embeddings with HDBSCAN clustering',
-        'version': '0.8.5',
-        'created_at': '2023-11-30'
-    })
-    
-    # Add feature extractors
+    # Add feature extractor
     model_types['feature_extractor'].append({
         'name': 'Financial Metrics Extractor',
-        'description': 'Regex and rule-based financial metrics extraction',
-        'version': '1.1.0',
-        'created_at': '2023-10-02'
-    })
-    
-    model_types['feature_extractor'].append({
-        'name': 'NER-based Feature Extractor',
-        'description': 'Named Entity Recognition for financial metrics',
-        'version': '0.9.0',
-        'created_at': '2023-12-05'
+        'description': 'Extracts financial metrics, embeddings, sentiment and topic features',
+        'version': '1.0.0',
+        'created_at': datetime.now().strftime('%Y-%m-%d')
     })
     
     return model_types
-
 
 def format_topics(topic_model: TopicModeler) -> pd.DataFrame:
     """Format topic model data into a DataFrame for visualization.
@@ -380,32 +340,126 @@ def format_sentiment_result(result: Dict[str, float]) -> pd.DataFrame:
 
 
 def extract_topic_visualization(topic_model: TopicModeler) -> str:
-    """Extract interactive visualization HTML from topic model for dashboard display.
+    """Extract or generate interactive visualization HTML from topic model.
     
     Attempts to get HTML-based interactive visualizations from the topic model
-    if it supports this capability. Topic models like pyLDAvis and BERTopic
-    can generate interactive visualizations that show topic distributions and
-    relationships, which this function extracts for embedding in the dashboard.
+    if it supports this capability. If not available, generates a Plotly-based
+    visualization showing topic relationships.
     
     Args:
-        topic_model (TopicModeler): The initialized topic model object that
-            may implement the get_visualization_html() method.
+        topic_model (TopicModeler): The initialized topic model object
         
     Returns:
-        str: HTML string containing the interactive visualization if the model
-            supports it, or an empty string if not available.
-            
-    Example:
-        >>> html_content = extract_topic_visualization(topic_model)
-        >>> if html_content:
-        ...     st.components.v1.html(html_content, height=800)
-        ... else:
-        ...     st.warning("No visualization available for this model")
+        str: HTML string containing the interactive visualization
     """
+    # First try to use the model's built-in visualization if available
     if hasattr(topic_model, 'get_visualization_html'):
-        return topic_model.get_visualization_html()
-    return ""
+        html = topic_model.get_visualization_html()
+        if html:
+            return html
+    
+    # If no built-in visualization, create one with Plotly
+    try:
+        import plotly.graph_objects as go
+        import numpy as np
+        
+        # Get number of topics
+        num_topics = topic_model.num_topics if hasattr(topic_model, 'num_topics') else 10
+        
+        # Function to get topic words
+        def get_topic_words(topic_id, num_words=10):
+            if hasattr(topic_model, 'get_topic_words'):
+                return topic_model.get_topic_words(topic_id, num_words)
+            elif hasattr(topic_model, 'topic_words') and topic_model.topic_words:
+                if topic_id in topic_model.topic_words:
+                    return topic_model.topic_words[topic_id][:num_words]
+            return []
+        
+        # Generate topic positions in 2D space
+        np.random.seed(42)  # For reproducibility
+        x_pos = np.random.normal(0, 1, size=num_topics)
+        y_pos = np.random.normal(0, 1, size=num_topics)
+        
+        # Calculate topic sizes based on word counts
+        sizes = [len(get_topic_words(i, 20)) for i in range(num_topics)]
+        sizes = [50 + s*5 for s in sizes]  # Scale for visibility
+        
+        # Create hover texts
+        hover_texts = []
+        for i in range(num_topics):
+            words = get_topic_words(i, 10)
+            if isinstance(words, list):
+                topic_words_text = ", ".join(words[:8])
+            else:
+                topic_words_text = str(words)
+            hover_texts.append(f"Topic {i}<br>{topic_words_text}")
+        
+        # Create the scatter plot
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatter(
+            x=x_pos,
+            y=y_pos,
+            mode='markers+text',
+            marker=dict(
+                size=sizes,
+                color=list(range(num_topics)),
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(title="Topic ID")
+            ),
+            text=[f"{i}" for i in range(num_topics)],
+            hovertext=hover_texts,
+            hoverinfo='text',
+            name='Topics'
+        ))
+        
+        fig.update_layout(
+            title="Topic Similarity Map (2D Projection)",
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            hovermode='closest',
+            width=800,
+            height=600
+        )
+        
+        # Convert to HTML
+        return fig.to_html(include_plotlyjs='cdn', full_html=False)
+        
+    except Exception as e:
+        logger.error(f"Error creating topic visualization: {str(e)}")
+        return ""
 
+def get_visualization_html(self) -> str:
+    """Generate an interactive HTML visualization of the topic model.
+    
+    Returns:
+        str: HTML content for interactive visualization, or empty string if unavailable
+    """
+    try:
+        if self.method == 'lda':
+            # For LDA models, generate pyLDAvis visualization
+            import pyLDAvis
+            import pyLDAvis.sklearn
+            
+            if not hasattr(self, '_prepared_vis'):
+                # Only prepare visualization once (it's computationally expensive)
+                if hasattr(self, 'dtm') and hasattr(self, 'model'):
+                    self._prepared_vis = pyLDAvis.sklearn.prepare(
+                        self.model, self.dtm, self.vectorizer
+                    )
+                else:
+                    return ""
+                    
+            # Convert to HTML
+            return pyLDAvis.prepared_data_to_html(self._prepared_vis)
+            
+        # Add other model type visualizations here if needed
+        
+    except Exception as e:
+        logger.error(f"Error generating visualization: {str(e)}")
+        
+    return ""
 
 def get_feature_importance_plot(feature_extractor: FeatureExtractor) -> Optional[plt.Figure]:
     """Generate a feature importance visualization from the feature extractor.
@@ -612,9 +666,11 @@ def create_prediction_simulator(models: Dict[str, Any], sample_text: str) -> Dic
         simulator['predict_topics'] = lambda text: models['topic'].extract_topics([text])
     else:
         simulator['predict_topics'] = lambda text: None
-    
+        
     if 'feature_extractor' in models:
-        simulator['extract_features'] = lambda text: models['feature_extractor'].extract_features(text)
+        simulator['extract_features'] = lambda text: models['feature_extractor'].extract_financial_metrics(
+            pd.DataFrame({'text': [text]})
+        ) if text else {}
     else:
         simulator['extract_features'] = lambda text: None
     
@@ -670,3 +726,5 @@ def create_topic_explorer(topic_model: Optional[TopicModeler]) -> Dict[str, Any]
     }
     
     return explorer
+
+

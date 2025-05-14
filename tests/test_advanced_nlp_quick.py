@@ -341,11 +341,14 @@ def test_feature_extraction(train_df, val_df, embedding_processor, sentiment_ana
     if len(feature_names) != X_val_df.shape[1] or not all(col in X_val_df.columns for col in feature_names):
         logger.warning(f"Feature mismatch: Training has {len(feature_names)} features, validation has {X_val_df.shape[1]}")
         
-        # Add missing columns from training to validation
-        for col in feature_names:
-            if col not in X_val_df.columns:
-                X_val_df[col] = 0
-                logger.info(f"Adding missing column '{col}' to validation features")
+        # Use this vectorized approach:
+        missing_cols = [col for col in feature_names if col not in X_val_df.columns]
+        if missing_cols:
+            logger.info(f"Adding {len(missing_cols)} missing columns to validation features")
+            # Create a new DataFrame with all missing columns filled with zeros
+            missing_df = pd.DataFrame(0, index=X_val_df.index, columns=missing_cols)
+            # Concatenate with existing DataFrame once
+            X_val_df = pd.concat([X_val_df, missing_df], axis=1)
         
         # Remove extra columns in validation not in training (if any)
         extra_cols = [col for col in X_val_df.columns if col not in feature_names]
@@ -422,21 +425,111 @@ def test_feature_extraction(train_df, val_df, embedding_processor, sentiment_ana
     try:
         os.makedirs('models/features/quick_test', exist_ok=True)
         
-        # Try an alternative path if the first one fails
-        try:
-            feature_extractor.save('models/features/quick_test/feature_extractor')
-        except PermissionError:
-            # Try with a timestamped filename to avoid conflicts
-            import time
-            timestamp = int(time.time())
-            alt_path = f'models/features/quick_test/feature_extractor_{timestamp}'
-            logger.warning(f"Permission denied on original path, trying alternative: {alt_path}")
-            feature_extractor.save(alt_path)
+        saved_path = save_feature_extractor(feature_extractor)
+        if saved_path:
+            logger.info(f"Feature extractor successfully saved to: {saved_path}")
+        else:
+            logger.warning("Failed to save feature extractor")
             
     except Exception as e:
         logger.warning(f"Failed to save feature extractor: {str(e)}")
     
     return feature_extractor
+
+# Add these functions after the test_feature_extraction function
+
+def save_feature_extractor(feature_extractor, base_path='models/features/quick_test'):
+    """Save feature extractor with fallback to timestamped version.
+    
+    Args:
+        feature_extractor: The feature extractor instance to save
+        base_path (str): Base directory to save the model
+        
+    Returns:
+        str: Path where the model was successfully saved
+    """
+    import os
+    import time
+    
+    os.makedirs(base_path, exist_ok=True)
+    
+    # First try the standard path
+    standard_path = f'{base_path}/feature_extractor'
+    try:
+        feature_extractor.save(standard_path)
+        logger.info(f"Feature extractor saved to: {standard_path}")
+        
+        # Save the path as the latest version reference
+        with open(f'{base_path}/latest_model_path.txt', 'w') as f:
+            f.write(standard_path)
+            
+        return standard_path
+        
+    except PermissionError:
+        # Use timestamped version as fallback
+        timestamp = int(time.time())
+        alt_path = f'{base_path}/feature_extractor_{timestamp}'
+        
+        try:
+            feature_extractor.save(alt_path)
+            logger.info(f"Feature extractor saved to timestamped path: {alt_path}")
+            
+            # Save the path as the latest version reference
+            with open(f'{base_path}/latest_model_path.txt', 'w') as f:
+                f.write(alt_path)
+                
+            return alt_path
+            
+        except Exception as e:
+            logger.error(f"Failed to save feature extractor: {str(e)}")
+            return None
+
+def load_latest_feature_extractor(base_path='models/features/quick_test'):
+    """Load the latest feature extractor model.
+    
+    Args:
+        base_path (str): Base directory where models are saved
+        
+    Returns:
+        FeatureExtractor: The loaded feature extractor or None if not found
+    """
+    import os
+    from src.nlp.feature_extraction import FeatureExtractor
+    
+    # First check if we have a reference to the latest model
+    reference_file = f'{base_path}/latest_model_path.txt'
+    if os.path.exists(reference_file):
+        with open(reference_file, 'r') as f:
+            model_path = f.read().strip()
+            if os.path.exists(model_path):
+                logger.info(f"Loading feature extractor from referenced path: {model_path}")
+                return FeatureExtractor.load(model_path)
+    
+    # If no reference exists or it's invalid, find the latest model by timestamp
+    try:
+        if os.path.exists(base_path):
+            files = [f for f in os.listdir(base_path) if f.startswith('feature_extractor')]
+            
+            # No timestamp files check standard path
+            if not any('_' in f for f in files) and 'feature_extractor' in files:
+                standard_path = f'{base_path}/feature_extractor'
+                logger.info(f"Loading feature extractor from standard path: {standard_path}")
+                return FeatureExtractor.load(standard_path)
+            
+            # Get timestamped files
+            timestamped_files = [f for f in files if '_' in f]
+            if timestamped_files:
+                # Sort by timestamp (highest/most recent last)
+                latest_file = sorted(timestamped_files)[-1]
+                model_path = f'{base_path}/{latest_file}'
+                logger.info(f"Loading feature extractor from latest timestamped path: {model_path}")
+                return FeatureExtractor.load(model_path)
+    
+    except Exception as e:
+        logger.error(f"Error while finding/loading feature extractor: {str(e)}")
+    
+    logger.error("No feature extractor model found")
+    return None
 
 def run_advanced_nlp_test(sample_size=100, max_features=100, num_topics=2):
     """Run the full advanced NLP test pipeline with configurable parameters for quick testing.

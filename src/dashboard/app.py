@@ -270,11 +270,24 @@ class EarningsReportDashboard:
             to set up navigation and process any uploaded data.
         """
         st.sidebar.title("Options")
+    
+        # Check if we need to change pages based on button clicks
+        if "nav_target" in st.session_state:
+            default_page = st.session_state.nav_target
+            # Clear the target so it doesn't keep redirecting
+            del st.session_state.nav_target
+        else:
+            # Use existing selection or default to Home
+            default_page = st.session_state.get("navigation", "Home")
         
-        # Navigation
+        # Navigation with the pre-selected value
         page = st.sidebar.radio(
             "Navigation",
-            ["Home", "Text Analysis", "Dataset Analysis", "Model Zoo", "Topic Explorer", "Prediction Simulator", "Model Performance", "About"]
+            ["Home", "Text Analysis", "Dataset Analysis", "Model Zoo", 
+            "Topic Explorer", "Prediction Simulator", "Model Performance", "About"],
+            key="navigation",
+            index=["Home", "Text Analysis", "Dataset Analysis", "Model Zoo", 
+                "Topic Explorer", "Prediction Simulator", "Model Performance", "About"].index(default_page)
         )
         
         # Models info
@@ -330,47 +343,56 @@ class EarningsReportDashboard:
         """
         st.header("Text Analysis")
         
-        col1, col2 = st.columns([3, 1])
+        # Input section
+        st.subheader("Input Text")
+        text = st.text_area(
+            "Enter earnings report text to analyze",
+            height=200,
+            key="text_input",
+            help="Paste earnings report text here for analysis"
+        )
         
-        with col1:
-            # Text input area
-            st.subheader("Input Text")
-            text = st.text_area(
-                "Enter earnings report text to analyze",
-                height=200,
-                key="text_input",
-                help="Paste earnings report text here for analysis"
-            )
+        # Sample text selection
+        if self.sample_data is not None and 'text' in self.sample_data.columns:
+            st.subheader("Or select a sample")
+            col1, col2 = st.columns([3, 1])
             
-            # Sample text selection
-            if self.sample_data is not None and 'text' in self.sample_data.columns:
-                st.subheader("Or select a sample")
+            with col1:
                 sample_idx = st.selectbox(
                     "Select a sample text",
                     range(min(10, len(self.sample_data))),
                     format_func=lambda i: f"Sample {i+1}: {self.sample_data.iloc[i]['text'][:50]}..."
                 )
-                
+            
+            with col2:
                 if st.button("Use this sample"):
                     text = self.sample_data.iloc[sample_idx]['text']
                     st.session_state.text_input = text
+                    st.rerun()  # Force rerun to update the text area
         
-        with col2:
-            # Analysis options
-            st.subheader("Analysis Options")
-            
+        # Analysis options - in horizontal layout
+        st.subheader("Analysis Options")
+        options_col1, options_col2, options_col3, options_col4 = st.columns(4)
+        
+        with options_col1:
             run_sentiment = st.checkbox("Sentiment Analysis", value=True)
+        with options_col2:
             run_topics = st.checkbox("Topic Extraction", value=True)
+        with options_col3:
             run_features = st.checkbox("Feature Extraction", value=True)
-            
-            if st.button("Analyze Text", key="analyze_btn"):
-                if not text:
-                    st.error("Please enter or select some text to analyze")
-                    return
-                
-                # Analysis results container
+        
+        # Analyze button - outside any column to appear in full width
+        analyze_clicked = st.button("Analyze Text", key="analyze_btn", type="primary")
+        
+        # Process text only if button is clicked
+        if analyze_clicked:
+            if not text:
+                st.error("Please enter or select some text to analyze")
+            else:
+                # Analysis results will appear below the button in the main area
                 with st.spinner("Analyzing text..."):
                     self._analyze_text(text, run_sentiment, run_topics, run_features)
+                    
     def _analyze_text(self, text, run_sentiment=True, run_topics=True, run_features=True):
         """Perform text analysis and display results.
         
@@ -460,28 +482,64 @@ class EarningsReportDashboard:
         if run_features and 'feature_extractor' in self.models:
             st.markdown("### Key Features")
             try:
-                features = self.models['feature_extractor'].extract_features(text)
+                # Create a DataFrame with the single text entry
+                text_df = pd.DataFrame({'text': [text]})
                 
-                # Create columns for feature display
-                cols = st.columns(2)
+                # Get the metrics separately for better display
+                metrics = self.models['feature_extractor'].extract_financial_metrics(text_df)
                 
-                with cols[0]:
-                    st.subheader("Extracted Features")
-                    if isinstance(features, dict):
-                        feature_df = pd.DataFrame(
-                            {'Feature': list(features.keys()), 'Value': list(features.values())}
+                if metrics and len(metrics) > 0:
+                    # Convert metrics to DataFrame for better display
+                    metrics_df = pd.DataFrame(list(metrics.items()), columns=['Metric', 'Value'])
+                    
+                    # Group metrics by type
+                    dollar_metrics = metrics_df[metrics_df['Metric'].str.contains('dollar')]
+                    percentage_metrics = metrics_df[metrics_df['Metric'].str.contains('percentage')]
+                    other_metrics = metrics_df[~metrics_df['Metric'].str.contains('dollar|percentage')]
+                    
+                    # Create main columns
+                    main_cols = st.columns([3, 2])
+                    
+                    with main_cols[0]:
+                        st.subheader("Extracted Financial Metrics")
+                        
+                        # Use expandable sections for better organization
+                        with st.expander("💵 Dollar Amounts", expanded=True):
+                            if not dollar_metrics.empty:
+                                st.dataframe(dollar_metrics, use_container_width=True, height=min(35*len(dollar_metrics)+38, 250))
+                            else:
+                                st.info("No dollar amounts found")
+                                
+                        with st.expander("📊 Percentages", expanded=True):
+                            if not percentage_metrics.empty:
+                                st.dataframe(percentage_metrics, use_container_width=True, height=min(35*len(percentage_metrics)+38, 250))
+                            else:
+                                st.info("No percentages found")
+                                
+                        if not other_metrics.empty:
+                            with st.expander("🔢 Other Metrics"):
+                                st.dataframe(other_metrics, use_container_width=True)
+                        
+                        # Add download button
+                        csv = metrics_df.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            "Download metrics as CSV",
+                            csv,
+                            "financial_metrics.csv",
+                            "text/csv",
+                            key='download-metrics'
                         )
-                        st.dataframe(feature_df)
-                    elif isinstance(features, pd.DataFrame):
-                        st.dataframe(features)
-                    else:
-                        st.write("Features extracted but format not recognized")
-                
-                with cols[1]:
-                    # Display feature importance plot if available
-                    fig = get_feature_importance_plot(self.models['feature_extractor'])
-                    if fig:
-                        st.pyplot(fig)
+                    
+                    with main_cols[1]:
+                        # Also get and show the complete feature set
+                        features, feature_names = self.models['feature_extractor'].extract_features(text_df)
+                        
+                        # Display feature importance plot if available
+                        fig = get_feature_importance_plot(self.models['feature_extractor'])
+                        if fig:
+                            st.pyplot(fig)
+                else:
+                    st.info("No financial metrics found in the text")
                     
             except Exception as e:
                 st.error(f"Error in feature extraction: {str(e)}")
@@ -587,37 +645,14 @@ class EarningsReportDashboard:
                         st.error(f"Error analyzing target variable: {str(e)}")
                         
     def render_model_zoo(self):
-        """Render the model zoo page showcasing available pre-trained models.
-        
-        Creates an interactive catalog of available pre-trained models for financial
-        text analysis, organized by type (sentiment, topic, feature extraction).
-        The page allows users to explore model descriptions, performance metrics,
-        and try out models with sample inputs.
-        
-        The method:
-        1. Creates tabbed sections for different model categories
-        2. Displays model information including descriptions and metrics
-        3. Provides interactive demo functionality for each model
-        4. Shows comparisons between different models in the same category
-        
-        Args:
-            None
-            
-        Returns:
-            None: The model zoo page is rendered directly to the Streamlit UI.
-            
-        Note:
-            This method uses the available_models dictionary to populate the
-            model information. The actual models available may vary depending
-            on what was successfully loaded during initialization.
-        """
+        """Render the model zoo page showcasing available pre-trained models."""
         st.header("Model Zoo")
         
         st.markdown("""
         ### Pre-trained Models for Financial Text Analysis
         
-        Browse and try out different pre-trained models for analyzing earnings reports.
-        These models can be used for various NLP tasks related to financial document analysis.
+        Browse and try out the available models for analyzing earnings reports.
+        These models are used for various NLP tasks in the dashboard.
         """)
         
         # Create tabs for different model categories
@@ -627,161 +662,122 @@ class EarningsReportDashboard:
         with model_tabs[0]:
             st.subheader("Financial Sentiment Analysis Models")
             
-            # Display available sentiment models
-            sentiment_models = {
-                "FinBERT": "Financial domain-specific BERT model fine-tuned for sentiment analysis",
-                "FinVADER": "Lexicon-based sentiment analyzer adapted for financial terminology",
-                "Financial LLM": "Large language model fine-tuned on financial disclosures"
-            }
-            
-            for model_name, description in sentiment_models.items():
-                with st.expander(f"{model_name}"):
-                    st.write(description)
-                    
-                    # Show model details
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("Accuracy", "92.4%" if model_name == "FinBERT" else "88.7%" if model_name == "FinVADER" else "94.2%")
-                    with col2:
-                        st.metric("F1 Score", "0.91" if model_name == "FinBERT" else "0.86" if model_name == "FinVADER" else "0.93")
-                    
-                    # Try model section
-                    st.markdown("#### Try the model")
-                    sample_text = st.text_area(
-                        "Enter text for sentiment analysis", 
-                        "We are pleased to report strong financial results for the quarter.",
-                        key=f"sentiment_sample_{model_name}"
-                    )
-                    
-                    if st.button("Analyze", key=f"analyze_btn_{model_name}"):
-                        with st.spinner("Analyzing sentiment..."):
-                            if 'sentiment' in self.models:
-                                result = self.models['sentiment'].analyze(sample_text)
-                                result_df = format_sentiment_result(result)
-                                st.dataframe(result_df)
-                            else:
-                                st.info("Model not currently loaded. Simulating result...")
-                                # Simulate results
-                                result_df = pd.DataFrame({
-                                    'Dimension': ['Positive', 'Negative', 'Neutral'],
-                                    'Score': [0.78, 0.12, 0.10]
-                                })
-                                st.dataframe(result_df)
+            if 'sentiment' in self.available_models and self.available_models['sentiment']:
+                for model in self.available_models['sentiment']:
+                    with st.expander(f"{model['name']}"):
+                        st.write(model['description'])
+                        
+                        # Show model details
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Version", model['version'])
+                        with col2:
+                            st.metric("Created", model['created_at'])
+                        
+                        # Try model section
+                        st.markdown("#### Try the model")
+                        sample_text = st.text_area(
+                            "Enter text for sentiment analysis", 
+                            "We are pleased to report strong financial results for the quarter.",
+                            key=f"sentiment_sample_{model['name']}"
+                        )
+                        
+                        if st.button("Analyze", key=f"analyze_btn_{model['name']}"):
+                            with st.spinner("Analyzing sentiment..."):
+                                if 'sentiment' in self.models:
+                                    result = self.models['sentiment'].analyze(sample_text)
+                                    result_df = format_sentiment_result(result)
+                                    st.dataframe(result_df)
+                                else:
+                                    st.error("Sentiment model not loaded")
+            else:
+                st.info("No sentiment models available")
         
         # Topic Models Tab
         with model_tabs[1]:
             st.subheader("Financial Topic Models")
             
-            # Display available topic models
-            topic_models = {
-                "FinLDA": "Latent Dirichlet Allocation model trained on earnings reports",
-                "BERTopic": "Topic modeling with BERT embeddings",
-                "Financial Entity-Aware Topics": "Topic model with financial entity recognition"
-            }
-            
-            for model_name, description in topic_models.items():
-                with st.expander(f"{model_name}"):
-                    st.write(description)
-                    
-                    # Show topic examples
-                    st.markdown("#### Sample Topics")
-                    
-                    topics_example = {
-                        "Revenue Growth": ["revenue", "growth", "increase", "sales", "performance"],
-                        "Cost Management": ["cost", "expense", "reduction", "margin", "efficiency"],
-                        "Market Outlook": ["market", "future", "expect", "outlook", "forecast"]
-                    }
-                    
-                    for topic, words in topics_example.items():
-                        st.markdown(f"**{topic}:** {', '.join(words)}")
-                    
-                    # Try model section
-                    st.markdown("#### Try the model")
-                    sample_text = st.text_area(
-                        "Enter text for topic modeling", 
-                        "Our revenue increased by 15% this quarter due to strong product sales and market expansion.",
-                        key=f"topic_sample_{model_name}"
-                    )
-                    
-                    if st.button("Extract Topics", key=f"topic_btn_{model_name}"):
-                        with st.spinner("Extracting topics..."):
-                            if 'topic' in self.models:
-                                # Use actual topic model if available
-                                topics = self.models['topic'].extract_topics([sample_text])
-                                st.write(topics)
-                            else:
-                                # Simulate results
-                                st.info("Model not currently loaded. Simulating result...")
-                                sim_topics = [
-                                    ("Revenue Growth", 0.75),
-                                    ("Market Expansion", 0.25)
-                                ]
-                                st.write(sim_topics)
+            if 'topic' in self.available_models and self.available_models['topic']:
+                for model in self.available_models['topic']:
+                    with st.expander(f"{model['name']}"):
+                        st.write(model['description'])
+                        
+                        # Show model details
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Version", model['version'])
+                        with col2:
+                            st.metric("Created", model['created_at'])
+                        
+                        # Try model section
+                        st.markdown("#### Try the model")
+                        sample_text = st.text_area(
+                            "Enter text for topic modeling", 
+                            "Our revenue increased by 15% this quarter due to strong product sales and market expansion.",
+                            key=f"topic_sample_{model['name']}"
+                        )
+                        
+                        if st.button("Extract Topics", key=f"topic_btn_{model['name']}"):
+                            with st.spinner("Extracting topics..."):
+                                if 'topic' in self.models:
+                                    # Use actual topic model
+                                    topics = self.models['topic'].extract_topics([sample_text])
+                                    if isinstance(topics, list) and len(topics) > 0:
+                                        topics_df = pd.DataFrame(topics, columns=['Topic ID', 'Score'])
+                                        topics_df['Topic Words'] = topics_df['Topic ID'].apply(
+                                            lambda tid: ", ".join(self.models['topic'].get_topic_words(tid, 10))
+                                            if hasattr(self.models['topic'], 'get_topic_words') else f"Topic {tid}"
+                                        )
+                                        st.dataframe(topics_df)
+                                    else:
+                                        st.write("No clear topics identified")
+                                else:
+                                    st.error("Topic model not loaded")
+            else:
+                st.info("No topic models available")
         
         # Feature Extraction Models Tab
         with model_tabs[2]:
             st.subheader("Financial Feature Extraction Models")
             
-            # Display available feature extraction models
-            feature_models = {
-                "FinMetrics": "Extract financial metrics like revenue, EPS, and growth rates",
-                "EntityExtractor": "Identify companies, products and financial entities",
-                "TemporalAnalyzer": "Extract time-based information and comparisons"
-            }
-            
-            for model_name, description in feature_models.items():
-                with st.expander(f"{model_name}"):
-                    st.write(description)
-                    
-                    # Show feature examples
-                    st.markdown("#### Extractable Features")
-                    
-                    if model_name == "FinMetrics":
-                        features = ["Revenue ($)", "EPS", "Growth Rate (%)", "Margin (%)", "YoY Change (%)"]
-                    elif model_name == "EntityExtractor":
-                        features = ["Companies", "Products", "Sectors", "Regions", "Financial Instruments"]
-                    else:
-                        features = ["Quarter References", "Year References", "Comparisons", "Future Projections"]
+            if 'feature_extractor' in self.available_models and self.available_models['feature_extractor']:
+                for model in self.available_models['feature_extractor']:
+                    with st.expander(f"{model['name']}"):
+                        st.write(model['description'])
                         
-                    for feature in features:
-                        st.markdown(f"- {feature}")
-                    
-                    # Try model section
-                    st.markdown("#### Try the model")
-                    sample_text = st.text_area(
-                        "Enter text for feature extraction", 
-                        "In Q2 2024, we reported revenue of $125.3M, with EPS of $1.42, representing a 12% increase from the previous year.",
-                        key=f"feature_sample_{model_name}"
-                    )
-                    
-                    if st.button("Extract Features", key=f"feature_btn_{model_name}"):
-                        with st.spinner("Extracting features..."):
-                            if 'feature_extractor' in self.models:
-                                # Use actual feature extractor if available
-                                features = self.models['feature_extractor'].extract_features(sample_text)
-                                if isinstance(features, dict):
-                                    feature_df = pd.DataFrame({
-                                        'Feature': list(features.keys()),
-                                        'Value': list(features.values())
-                                    })
-                                    st.dataframe(feature_df)
+                        # Show model details
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Version", model['version'])
+                        with col2:
+                            st.metric("Created", model['created_at'])
+                        
+                        # Try model section
+                        st.markdown("#### Try the model")
+                        sample_text = st.text_area(
+                            "Enter text for feature extraction", 
+                            "In Q2 2024, we reported revenue of $125.3M, with EPS of $1.42, representing a 12% increase from the previous year.",
+                            key=f"feature_sample_{model['name']}"
+                        )
+                        
+                        if st.button("Extract Features", key=f"feature_btn_{model['name']}"):
+                            with st.spinner("Extracting features..."):
+                                if 'feature_extractor' in self.models:
+                                    # Use actual feature extractor
+                                    sample_df = pd.DataFrame({'text': [sample_text]})
+                                    
+                                    # Get financial metrics
+                                    metrics = self.models['feature_extractor'].extract_financial_metrics(sample_df)
+                                    
+                                    if metrics and len(metrics) > 0:
+                                        metrics_df = pd.DataFrame(list(metrics.items()), columns=['Metric', 'Value'])
+                                        st.dataframe(metrics_df)
+                                    else:
+                                        st.info("No financial metrics found in the text")
                                 else:
-                                    st.write(features)
-                            else:
-                                # Simulate results
-                                st.info("Model not currently loaded. Simulating result...")
-                                sim_features = {
-                                    "Revenue": "$125.3M",
-                                    "EPS": "$1.42",
-                                    "Growth Rate": "12%",
-                                    "Time Period": "Q2 2024",
-                                    "Comparison": "Previous Year"
-                                }
-                                sim_df = pd.DataFrame({
-                                    'Feature': list(sim_features.keys()),
-                                    'Value': list(sim_features.values())
-                                })
-                                st.dataframe(sim_df)
+                                    st.error("Feature extraction model not loaded")
+            else:
+                st.info("No feature extraction models available")
         
         # Custom Models Tab
         with model_tabs[3]:
@@ -982,28 +978,55 @@ class EarningsReportDashboard:
                 height=200
             )
         
-        # Model selection
+        # Model selection - using actual available models
         st.subheader("Select Analysis Models")
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            sentiment_model = st.selectbox(
-                "Sentiment Analysis Model",
-                ["FinBERT", "FinVADER", "Financial LLM"]
-            )
+            # Get available sentiment models
+            sentiment_models = []
+            if 'sentiment' in self.available_models and self.available_models['sentiment']:
+                sentiment_models = [model['name'] for model in self.available_models['sentiment']]
+            
+            if sentiment_models:
+                sentiment_model = st.selectbox(
+                    "Sentiment Analysis Model",
+                    sentiment_models
+                )
+            else:
+                st.info("No sentiment models available")
+                sentiment_model = None
         
         with col2:
-            topic_model = st.selectbox(
-                "Topic Model",
-                ["FinLDA", "BERTopic", "Financial Entity-Aware Topics"]
-            )
+            # Get available topic models
+            topic_models = []
+            if 'topic' in self.available_models and self.available_models['topic']:
+                topic_models = [model['name'] for model in self.available_models['topic']]
+            
+            if topic_models:
+                topic_model = st.selectbox(
+                    "Topic Model",
+                    topic_models
+                )
+            else:
+                st.info("No topic models available")
+                topic_model = None
             
         with col3:
-            feature_model = st.selectbox(
-                "Feature Extraction Model",
-                ["FinMetrics", "EntityExtractor", "TemporalAnalyzer"]
-            )
+            # Get available feature extraction models
+            feature_models = []
+            if 'feature_extractor' in self.available_models and self.available_models['feature_extractor']:
+                feature_models = [model['name'] for model in self.available_models['feature_extractor']]
+            
+            if feature_models:
+                feature_model = st.selectbox(
+                    "Feature Extraction Model",
+                    feature_models
+                )
+            else:
+                st.info("No feature extraction models available")
+                feature_model = None
         
         # Analysis options
         st.subheader("Analysis Options")
@@ -1011,20 +1034,27 @@ class EarningsReportDashboard:
         options_col1, options_col2 = st.columns(2)
         
         with options_col1:
-            analyze_sentiment = st.checkbox("Analyze Sentiment", value=True)
-            extract_topics = st.checkbox("Extract Topics", value=True)
+            analyze_sentiment = st.checkbox("Analyze Sentiment", value=True and sentiment_model is not None)
+            extract_topics = st.checkbox("Extract Topics", value=True and topic_model is not None)
             
         with options_col2:
-            extract_features = st.checkbox("Extract Financial Metrics", value=True)
+            extract_features = st.checkbox("Extract Financial Metrics", value=True and feature_model is not None)
             predict_movement = st.checkbox("Predict Stock Movement", value=True)
         
+        # Check if any models are available for analysis
+        if not (sentiment_model or topic_model or feature_model):
+            st.warning("No models are available for analysis. Please load models from the Model Zoo first.")
+        
         # Run analysis button
-        if st.button("Run Analysis", type="primary"):
+        run_button_disabled = not (sentiment_model or topic_model or feature_model)
+        
+        if st.button("Run Analysis", type="primary", disabled=run_button_disabled):
             if not earnings_text:
                 st.error("Please enter some earnings report text to analyze.")
                 return
                 
             with st.spinner("Analyzing earnings report..."):
+                # Rest of your existing analysis code here
                 # Create tabs for different analysis results
                 result_tabs = st.tabs(["Summary", "Sentiment", "Topics", "Financial Metrics", "Stock Prediction"])
                 
@@ -1041,7 +1071,7 @@ class EarningsReportDashboard:
                     with metrics_col1:
                         st.metric("Word Count", f"{word_count}")
                     
-                    # Simulate analysis results for the summary
+                    # Sentiment analysis results for the summary
                     if analyze_sentiment and 'sentiment' in self.models:
                         sentiment_result = self.models['sentiment'].analyze(earnings_text)
                         sentiment_score = sentiment_result.get('compound', 0)
@@ -1058,7 +1088,7 @@ class EarningsReportDashboard:
                         sentiment_label = "Positive" if sentiment_score > 0.2 else "Negative" if sentiment_score < -0.2 else "Neutral"
                         st.metric("Sentiment", sentiment_label, sentiment_score)
                     
-                    # Simulate stock prediction
+                    # Stock prediction
                     if predict_movement:
                         if sentiment_score > 0.5:
                             movement = "↑ Up"
@@ -1081,7 +1111,7 @@ class EarningsReportDashboard:
                     # Key insights
                     st.subheader("Key Insights")
                     
-                    # Generate mock insights based on the text
+                    # Generate insights based on the text
                     insights = []
                     
                     if "revenue" in earnings_text.lower():
@@ -1109,7 +1139,7 @@ class EarningsReportDashboard:
                     
                     for insight in insights:
                         st.markdown(f"- {insight}")
-                
+                     
                 # Sentiment tab
                 with result_tabs[1]:
                     if analyze_sentiment:
@@ -1120,38 +1150,47 @@ class EarningsReportDashboard:
                             result_df = format_sentiment_result(sentiment_result)
                             st.dataframe(result_df)
                             
-                            # Visualization
-                            fig, ax = plt.subplots()
-                            ax.barh(['Positive', 'Neutral', 'Negative'], 
-                                    [sentiment_result.get('pos', 0), 
-                                     sentiment_result.get('neu', 0), 
-                                     sentiment_result.get('neg', 0)])
-                            ax.set_xlim(0, 1)
-                            ax.set_title('Sentiment Breakdown')
-                            st.pyplot(fig)
-                        else:
-                            # Simulate sentiment analysis results
-                            st.info("Sentiment model not loaded. Showing simulated results.")
+                            # Debug the sentiment result to check what's available
+                            st.write("Debug - Sentiment Result:", sentiment_result)
                             
-                            if "exceeded expectations" in earnings_text.lower() or "pleased" in earnings_text.lower():
-                                pos, neu, neg = 0.78, 0.20, 0.02
-                            elif "fell short" in earnings_text.lower() or "challenges" in earnings_text.lower():
-                                pos, neu, neg = 0.15, 0.25, 0.60
-                            else:
-                                pos, neu, neg = 0.25, 0.65, 0.10
-                                
-                            result_df = pd.DataFrame({
-                                'Dimension': ['Positive', 'Neutral', 'Negative'],
-                                'Score': [pos, neu, neg]
+                            # Create a more reliable visualization using explicit values
+                            pos_score = sentiment_result.get('pos', 0) 
+                            neu_score = sentiment_result.get('neu', 0)
+                            neg_score = sentiment_result.get('neg', 0)
+                            
+                            # Create explicit DataFrame for visualization
+                            sentiment_plot_df = pd.DataFrame({
+                                'Sentiment': ['Positive', 'Neutral', 'Negative'],
+                                'Score': [pos_score, neu_score, neg_score]
                             })
-                            st.dataframe(result_df)
                             
-                            # Visualization
-                            fig, ax = plt.subplots()
-                            ax.barh(['Positive', 'Neutral', 'Negative'], [pos, neu, neg])
-                            ax.set_xlim(0, 1)
-                            ax.set_title('Sentiment Breakdown')
-                            st.pyplot(fig)
+                            # Add a more robust visualization
+                            try:
+                                fig = px.bar(
+                                    sentiment_plot_df,
+                                    x='Score',
+                                    y='Sentiment', 
+                                    orientation='h',
+                                    color='Sentiment',
+                                    color_discrete_map={
+                                        'Positive': 'green',
+                                        'Neutral': 'gray',
+                                        'Negative': 'red'
+                                    },
+                                    title='Sentiment Breakdown'
+                                )
+                                fig.update_layout(
+                                    xaxis_range=[0, 1],
+                                    height=300,
+                                    margin=dict(l=20, r=20, t=40, b=20)
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                            except Exception as e:
+                                st.error(f"Error creating sentiment visualization: {str(e)}")
+                                
+                                # Fallback to simpler visualization
+                                st.write("Fallback visualization:")
+                                st.bar_chart(sentiment_plot_df.set_index('Sentiment'))
                             
                         # Extract key sentiment phrases
                         st.subheader("Key Sentiment Phrases")
@@ -1189,84 +1228,103 @@ class EarningsReportDashboard:
                         st.subheader("Topic Analysis")
                         
                         if 'topic' in self.models:
-                            # Use the actual topic model
+                            # Get topics from model
                             topics = self.models['topic'].extract_topics([earnings_text])
-                            st.write(topics)
                             
-                            # Visualize topics
-                            # This would depend on the specific topic model's output format
-                        else:
-                            # Simulate topic modeling results
-                            st.info("Topic model not loaded. Showing simulated results.")
+                            # Debug the topic format
+                            st.write("Debug - Topic Format:", type(topics))
+                            st.write("Debug - Topic Content:", topics)
                             
-                            # Create simulated topics based on text content
-                            simulated_topics = []
+                            formatted_topics = []
                             
-                            if "revenue" in earnings_text.lower() or "sales" in earnings_text.lower():
-                                simulated_topics.append(("Revenue Performance", 0.85))
+                            # Handle different possible formats
+                            if isinstance(topics, list):
+                                for topic_entry in topics:
+                                    try:
+                                        # Handle list format [topic_id, score]
+                                        if isinstance(topic_entry, list) and len(topic_entry) >= 2:
+                                            topic_id = int(topic_entry[0])
+                                            score = float(topic_entry[1])
+                                        # Handle tuple format (topic_id, score)
+                                        elif isinstance(topic_entry, tuple) and len(topic_entry) >= 2:
+                                            topic_id = int(topic_entry[0])
+                                            score = float(topic_entry[1])
+                                        # Handle dictionary format
+                                        elif isinstance(topic_entry, dict) and 'id' in topic_entry and 'score' in topic_entry:
+                                            topic_id = int(topic_entry['id'])
+                                            score = float(topic_entry['score'])
+                                        else:
+                                            continue
+                                        
+                                        # Get topic words
+                                        if hasattr(self.models['topic'], 'get_topic_words'):
+                                            topic_words = self.models['topic'].get_topic_words(topic_id, 8)
+                                            if isinstance(topic_words, list):
+                                                if topic_words and isinstance(topic_words[0], tuple):
+                                                    # (word, score) format
+                                                    topic_label = ", ".join([word for word, _ in topic_words[:8]])
+                                                else:
+                                                    topic_label = ", ".join(topic_words[:8])
+                                            else:
+                                                topic_label = f"Topic {topic_id}"
+                                        else:
+                                            topic_label = f"Topic {topic_id}"
+                                        
+                                        formatted_topics.append({
+                                            "Topic ID": topic_id,
+                                            "Topic Label": topic_label,
+                                            "Relevance": score
+                                        })
+                                    except Exception as e:
+                                        st.warning(f"Error formatting topic: {str(e)}")
                             
-                            if "margin" in earnings_text.lower() or "profit" in earnings_text.lower():
-                                simulated_topics.append(("Profitability Metrics", 0.75))
-                            
-                            if "market" in earnings_text.lower() or "competition" in earnings_text.lower():
-                                simulated_topics.append(("Market Conditions", 0.65))
-                            
-                            if "product" in earnings_text.lower() or "service" in earnings_text.lower():
-                                simulated_topics.append(("Product Performance", 0.60))
-                            
-                            if "outlook" in earnings_text.lower() or "guidance" in earnings_text.lower() or "expect" in earnings_text.lower():
-                                simulated_topics.append(("Future Outlook", 0.80))
-                            
-                            if not simulated_topics:
-                                simulated_topics = [
-                                    ("General Financial Performance", 0.90),
-                                    ("Corporate Communications", 0.45)
-                                ]
+                            # If no topics were found or formatted, try simulating topics
+                            if not formatted_topics:
+                                st.info("No topics detected in the original format. Attempting to extract topics based on content...")
+                                
+                                # Simple keyword-based topic simulation
+                                keywords = {
+                                    "Financial Performance": ["revenue", "profit", "earnings", "financial", "quarter", "growth", "income"],
+                                    "Market Position": ["market", "share", "competition", "industry", "position", "leader"],
+                                    "Product Development": ["product", "development", "innovation", "launch", "roadmap"],
+                                    "Operations": ["operations", "production", "supply", "chain", "efficiency", "cost"],
+                                    "Future Outlook": ["outlook", "guidance", "future", "expect", "forecast", "anticipate"]
+                                }
+                                
+                                # Extract simulated topics based on keyword matches
+                                for topic_name, words in keywords.items():
+                                    text_lower = earnings_text.lower()
+                                    matches = sum(1 for word in words if word in text_lower)
+                                    if matches >= 2:  # At least 2 keyword matches to consider it a relevant topic
+                                        relevance = min(0.95, matches * 0.15)  # Calculate relevance score
+                                        formatted_topics.append({
+                                            "Topic ID": list(keywords.keys()).index(topic_name),
+                                            "Topic Label": f"{topic_name}: {', '.join(words[:5])}",
+                                            "Relevance": relevance
+                                        })
                             
                             # Display topics
-                            topic_df = pd.DataFrame(simulated_topics, columns=['Topic', 'Relevance'])
-                            st.dataframe(topic_df)
-                            
-                            # Topic visualization
-                            fig, ax = plt.subplots()
-                            topics, scores = zip(*simulated_topics)
-                            y_pos = np.arange(len(topics))
-                            ax.barh(y_pos, scores)
-                            ax.set_yticks(y_pos)
-                            ax.set_yticklabels(topics)
-                            ax.set_xlim(0, 1)
-                            ax.set_title('Topic Distribution')
-                            st.pyplot(fig)
-                            
-                            # Show word cloud
-                            st.subheader("Topic Word Cloud")
-                            words = earnings_text.split()
-                            word_counts = {}
-                            for word in words:
-                                word = word.lower().strip('.,!?()[]{}":;')
-                                if len(word) > 3:  # Skip short words
-                                    if word in word_counts:
-                                        word_counts[word] += 1
-                                    else:
-                                        word_counts[word] = 1
-                            
-                            # Create word cloud visualization
-                            if word_counts:
-                                # We can't actually create a wordcloud without the wordcloud package
-                                # So we'll just show top words as a bar chart
-                                sorted_words = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)
-                                top_words = sorted_words[:10]
+                            if formatted_topics:
+                                topics_df = pd.DataFrame(formatted_topics)
+                                st.write("### Document Topics")
+                                st.dataframe(topics_df)
                                 
-                                fig, ax = plt.subplots()
-                                words, counts = zip(*top_words)
-                                y_pos = np.arange(len(words))
-                                ax.barh(y_pos, counts)
-                                ax.set_yticks(y_pos)
-                                ax.set_yticklabels(words)
-                                ax.set_title('Top Words')
-                                st.pyplot(fig)
-                    else:
-                        st.info("Topic extraction was not selected.")
+                                # Create a visualization
+                                fig = px.bar(
+                                    topics_df,
+                                    x="Relevance",
+                                    y="Topic ID",
+                                    orientation='h',
+                                    title="Topic Distribution",
+                                    labels={"Topic ID": "Topic", "Relevance": "Score"}
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.info("No clear topics identified in this text")
+                                st.write("Consider trying a different topic model or using a longer text sample.")
+                        else:
+                            # Simulation code for when no topic model is loaded
+                            st.info("Topic model not loaded. Showing simulated results.")
                 
                 # Financial Metrics tab
                 with result_tabs[3]:
@@ -1274,65 +1332,76 @@ class EarningsReportDashboard:
                         st.subheader("Extracted Financial Metrics")
                         
                         if 'feature_extractor' in self.models:
-                            # Use the actual feature extractor
-                            features = self.models['feature_extractor'].extract_features(earnings_text)
-                            st.write(features)
+                            # Create a DataFrame with the single text entry
+                            earnings_df = pd.DataFrame({'text': [earnings_text]})
+                            
+                            # Try to use extract_financial_metrics first (more readable)
+                            try:
+                                metrics = self.models['feature_extractor'].extract_financial_metrics(earnings_df)
+                                
+                                if metrics and len(metrics) > 0:
+                                    # Convert to DataFrame for better display
+                                    metrics_df = pd.DataFrame(list(metrics.items()), columns=['Metric', 'Value'])
+                                    
+                                    # Clean up metric names for display
+                                    metrics_df['Metric'] = metrics_df['Metric'].str.replace('_', ' ').str.title()
+                                    
+                                    # Display the metrics in a clean table
+                                    st.write("### Financial Metrics")
+                                    st.dataframe(metrics_df, use_container_width=True)
+                                    
+                                    # Create a visualization if we have numeric values
+                                    try:
+                                        # Try to convert values to numeric for visualization
+                                        metrics_df['Numeric_Value'] = pd.to_numeric(
+                                            metrics_df['Value'].str.replace('$', '').str.replace('%', '').str.replace('B', '').str.replace('M', ''),
+                                            errors='coerce'
+                                        )
+                                        
+                                        # Filter for rows with valid numeric values
+                                        numeric_metrics = metrics_df.dropna(subset=['Numeric_Value'])
+                                        
+                                        if not numeric_metrics.empty:
+                                            fig = px.bar(
+                                                numeric_metrics,
+                                                x='Numeric_Value',
+                                                y='Metric',
+                                                orientation='h',
+                                                title="Key Financial Metrics"
+                                            )
+                                            st.plotly_chart(fig, use_container_width=True)
+                                    except:
+                                        pass  # Skip visualization if conversion fails
+                                else:
+                                    # Fall back to raw features
+                                    features, feature_names = self.models['feature_extractor'].extract_features(earnings_df)
+                                    
+                                    if isinstance(features, np.ndarray) and feature_names:
+                                        # Convert to DataFrame with feature names
+                                        if len(features.shape) == 2:
+                                            features_df = pd.DataFrame(features, columns=feature_names)
+                                        else:
+                                            features_df = pd.DataFrame([features], columns=feature_names)
+                                        
+                                        # Only show non-zero features
+                                        non_zero_cols = features_df.loc[:, (features_df != 0).any(axis=0)].columns
+                                        if len(non_zero_cols) > 0:
+                                            st.write("### Key Financial Features")
+                                            st.dataframe(features_df[non_zero_cols])
+                                        else:
+                                            st.info("No significant financial features detected")
+                                    else:
+                                        st.write(features)  # Fallback
+                                        st.info("Raw features shown above may need interpretation")
+                            except Exception as e:
+                                st.error(f"Error processing financial metrics: {str(e)}")
+                                # Fall back to raw features
+                                features, feature_names = self.models['feature_extractor'].extract_features(earnings_df)
+                                st.write("### Raw Feature Output")
+                                st.write(features)
                         else:
-                            # Simulate feature extraction
+                            # Your existing simulation code for feature extraction
                             st.info("Feature extraction model not loaded. Showing simulated results.")
-                            
-                            # Define regex patterns for financial metrics
-                            revenue_pattern = r'\$?\s?(\d+(?:\.\d+)?)\s?(?:billion|million|B|M)'
-                            percentage_pattern = r'(\d+(?:\.\d+)?)\s?%'
-                            quarter_pattern = r'Q[1-4]'
-                            year_pattern = r'20\d\d'
-                            
-                            # Extract metrics using regex
-                            revenue_matches = re.findall(revenue_pattern, earnings_text)
-                            percentage_matches = re.findall(percentage_pattern, earnings_text)
-                            quarter_matches = re.findall(quarter_pattern, earnings_text)
-                            year_matches = re.findall(year_pattern, earnings_text)
-                            
-                            # Create simulated metrics
-                            extracted_metrics = {}
-                            
-                            if revenue_matches and 'revenue' in earnings_text.lower():
-                                extracted_metrics['Revenue'] = f"${revenue_matches[0]}B" if 'billion' in earnings_text.lower() else f"${revenue_matches[0]}M"
-                            
-                            if percentage_matches:
-                                if 'growth' in earnings_text.lower():
-                                    extracted_metrics['Growth Rate'] = f"{percentage_matches[0]}%"
-                                if 'margin' in earnings_text.lower():
-                                    extracted_metrics['Margin'] = f"{percentage_matches[0]}%"
-                                if 'increase' in earnings_text.lower():
-                                    extracted_metrics['YoY Increase'] = f"{percentage_matches[0]}%"
-                            
-                            if quarter_matches:
-                                extracted_metrics['Quarter'] = quarter_matches[0]
-                            
-                            if year_matches:
-                                extracted_metrics['Year'] = year_matches[0]
-                            
-                            if "cash flow" in earnings_text.lower():
-                                cash_flow_text = re.search(r'cash flow of \$?\s?(\d+(?:\.\d+)?)\s?(?:billion|million|B|M)', earnings_text.lower())
-                                if cash_flow_text:
-                                    extracted_metrics['Cash Flow'] = f"${cash_flow_text.group(1)}M"
-                            
-                            # Add placeholder metrics if none were extracted
-                            if not extracted_metrics:
-                                extracted_metrics = {
-                                    "Metric Type": "No specific financial metrics detected",
-                                    "Analysis Notes": "Text appears to be qualitative rather than quantitative"
-                                }
-                            
-                            # Display extracted metrics
-                            metrics_df = pd.DataFrame({
-                                'Metric': list(extracted_metrics.keys()),
-                                'Value': list(extracted_metrics.values())
-                            })
-                            st.dataframe(metrics_df)
-                    else:
-                        st.info("Financial metrics extraction was not selected.")
                 
                 # Stock Prediction tab
                 with result_tabs[4]:
@@ -1452,7 +1521,12 @@ class EarningsReportDashboard:
             st.warning("No models available for performance analysis.")
             return
         
-        selected_model = st.selectbox("Select model", model_options)
+        # Sort model options to put implemented visualizations first
+        preferred_order = ['sentiment', 'topic', 'feature_extractor']
+        sorted_models = sorted(model_options, 
+                            key=lambda x: preferred_order.index(x) if x in preferred_order else len(preferred_order))
+        
+        selected_model = st.selectbox("Select model", sorted_models)
         
         if selected_model == 'topic':
             self._render_topic_model_performance()
@@ -1464,80 +1538,125 @@ class EarningsReportDashboard:
             st.write(f"Performance visualization not implemented for {selected_model} model.")
             
     def _render_topic_model_performance(self):
-        """Render topic model performance metrics and evaluation.
-        
-        Displays performance metrics specific to topic models, including coherence
-        scores, topic quality metrics, and topic distribution visualizations.
-        This method is called by render_model_performance when a topic model
-        is selected.
-        
-        The method:
-        1. Displays coherence and quality metrics for the topic model
-        2. Shows topic distributions across the corpus
-        3. Visualizes topic-word relevance
-        4. Provides diagnostic information about model fit
-        
-        Args:
-            None
-            
-        Returns:
-            None: Topic model performance metrics are rendered directly to the Streamlit UI.
-            
-        Note:
-            This method requires a topic model to be loaded and available in
-            the self.models dictionary under the 'topic' key.
-        """
-        if 'topic' not in self.models:
-            st.warning("Topic model not available.")
-            return
-        
+        """Render topic model performance metrics and evaluation."""
         st.subheader("Topic Model Performance")
         
-        # Coherence score
-        topic_model = self.models['topic']
-        if hasattr(topic_model, 'coherence_score'):
-            st.metric("Model Coherence Score", f"{topic_model.coherence_score:.4f}")
-        
-        # Topic distribution
-        st.subheader("Topic Distribution")
-        topics_df = format_topics(topic_model)
-        
-        if not topics_df.empty:
-            st.dataframe(topics_df)
+        if 'topic' in self.models:
+            # Display topic model information
+            model = self.models['topic']
+            st.write(f"**Model Type:** {model.method.upper() if hasattr(model, 'method') else 'Unknown'}")
+            st.write(f"**Number of Topics:** {model.num_topics if hasattr(model, 'num_topics') else 'Unknown'}")
             
-            # Topic word cloud or bar chart
-            if hasattr(topic_model, 'get_topic_words'):
-                # Create visualization for selected topic
-                topic_id = st.slider(
-                    "Select topic to visualize", 
-                    0, 
-                    max(0, topic_model.num_topics - 1), 
-                    0
+            # Check if topic words are available or generate them
+            if not hasattr(model, 'topic_words') or not model.topic_words:
+                st.info("Topic words not found in model. Generating from model components...")
+                
+                try:
+                    # Generate topic words from model components
+                    if hasattr(model, 'model') and hasattr(model, 'feature_names'):
+                        # Create topic_words dictionary
+                        num_topics = model.num_topics if hasattr(model, 'num_topics') else 10
+                        model.topic_words = {}
+                        
+                        # For LDA models, extract top words for each topic
+                        if hasattr(model.model, 'components_'):
+                            for topic_id in range(num_topics):
+                                # Get indices of top words for this topic
+                                top_indices = model.model.components_[topic_id].argsort()[:-21:-1]
+                                # Map indices to actual words using feature_names
+                                words = [model.feature_names[i] for i in top_indices]
+                                model.topic_words[topic_id] = words
+                            st.success(f"Successfully generated topic words for {num_topics} topics")
+                        else:
+                            st.warning("Model components not available for generating topic words")
+                    else:
+                        st.warning("Model or feature names not available")
+                        
+                    # If topic_words is still empty, try to load from file
+                    if not hasattr(model, 'topic_words') or not model.topic_words:
+                        raise ValueError("Could not generate topic words from model components")
+                        
+                except Exception as e:
+                    st.warning(f"Could not generate topic words: {str(e)}")
+                    
+                    # Try to load topic words from the model directory
+                    try:
+                        # Get the directory where the model is stored
+                        model_dir = os.path.dirname(TOPIC_MODEL_PATH)
+                        topic_words_path = os.path.join(model_dir, 'topic_words.json')
+                        
+                        st.info(f"Looking for topic words file at: {topic_words_path}")
+                        
+                        # If topic_words.json doesn't exist, create it from the model
+                        if not os.path.exists(topic_words_path) and hasattr(model.model, 'components_') and hasattr(model, 'feature_names'):
+                            st.info("Creating topic_words.json from model components...")
+                            
+                            # Generate topic words
+                            num_topics = model.num_topics if hasattr(model, 'num_topics') else 10
+                            topic_words = {}
+                            
+                            for topic_id in range(num_topics):
+                                # Get indices of top words for this topic
+                                top_indices = model.model.components_[topic_id].argsort()[:-21:-1]
+                                # Map indices to actual words using feature_names
+                                words = [model.feature_names[i] for i in top_indices]
+                                topic_words[str(topic_id)] = words
+                                
+                            # Save to file
+                            with open(topic_words_path, 'w') as f:
+                                json.dump(topic_words, f)
+                                
+                            st.success(f"Created topic words file at: {topic_words_path}")
+                        
+                        # Now try to load the file (either existing or newly created)
+                        if os.path.exists(topic_words_path):
+                            with open(topic_words_path, 'r') as f:
+                                topic_words = json.load(f)
+                                
+                            # Convert keys to integers
+                            model.topic_words = {int(k): v for k, v in topic_words.items()}
+                            st.success("Topic words loaded successfully!")
+                            st.rerun()
+                        else:
+                            st.error(f"Topic words file not found at: {topic_words_path}")
+                    except Exception as e:
+                        st.error(f"Error handling topic words: {str(e)}")
+            
+            # Display topic distribution if topic words are available
+            if hasattr(model, 'topic_words') and model.topic_words:
+                topics_df = pd.DataFrame({
+                    'Topic ID': list(model.topic_words.keys()),
+                    'Topic Label': [f"Topic {i}" for i in model.topic_words.keys()],
+                    'Top Words': [', '.join(words[:8]) for words in model.topic_words.values()]
+                })
+                st.write("### Topic Distribution")
+                st.dataframe(topics_df)
+                
+                # Add topic exploration section
+                st.write("### Explore Topics")
+                selected_topic = st.selectbox(
+                    "Select a topic to explore:", 
+                    options=list(model.topic_words.keys()),
+                    format_func=lambda x: f"Topic {x}: {', '.join(model.topic_words[x][:5])}"
                 )
                 
-                words = topic_model.get_topic_words(topic_id, 20)
-                
-                if isinstance(words, list):
-                    # Simple list of words
-                    word_data = pd.DataFrame({
-                        'word': words,
-                        'importance': range(len(words), 0, -1)  # Placeholder importance
-                    })
-                else:
-                    # (word, score) tuples
-                    word_data = pd.DataFrame({
-                        'word': [w[0] for w in words],
-                        'importance': [w[1] for w in words]
-                    })
-                
-                fig = px.bar(
-                    word_data, 
-                    x='importance', 
-                    y='word',
-                    orientation='h',
-                    title=f"Top Words for Topic {topic_id}"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                if selected_topic is not None:
+                    st.write(f"#### Top words for Topic {selected_topic}")
+                    st.write(", ".join(model.topic_words[selected_topic]))
+                    
+                    # Generate and display wordcloud for selected topic
+                    try:
+                        if hasattr(model, 'plot_wordcloud'):
+                            fig = model.plot_wordcloud(int(selected_topic))
+                            st.pyplot(fig)
+                        else:
+                            st.info("Wordcloud visualization not available for this model.")
+                    except Exception as e:
+                        st.error(f"Error generating wordcloud: {str(e)}")
+            else:
+                st.error("Unable to retrieve or generate topic words. The model may be incompatible.")
+        else:
+            st.error("Topic model not loaded")
                 
     def _render_sentiment_model_performance(self):
         """Render sentiment model performance metrics and evaluation.
@@ -1637,7 +1756,7 @@ class EarningsReportDashboard:
         
         # Show feature importance
         st.subheader("Feature Importance")
-        
+            
         fig = get_feature_importance_plot(feature_extractor)
         if fig:
             st.pyplot(fig)
@@ -1652,18 +1771,71 @@ class EarningsReportDashboard:
         )
         
         if st.button("Extract Features"):
-            features = feature_extractor.extract_features(sample_text)
+            try:
+                # Create a DataFrame with the single text entry
+                sample_df = pd.DataFrame({'text': [sample_text]})
+                
+                # First try to get financial metrics which are usually in a more user-friendly format
+                metrics = feature_extractor.extract_financial_metrics(sample_df)
+                
+                if metrics and len(metrics) > 0:
+                    # Display financial metrics in a clean format
+                    st.subheader("Financial Metrics")
+                    metrics_df = pd.DataFrame(list(metrics.items()), columns=['Metric', 'Value'])
+                    
+                    # Group metrics by type for cleaner display
+                    dollar_metrics = metrics_df[metrics_df['Metric'].str.contains('dollar')]
+                    percentage_metrics = metrics_df[metrics_df['Metric'].str.contains('percentage')]
+                    other_metrics = metrics_df[~metrics_df['Metric'].str.contains('dollar|percentage')]
+                    
+                    # Show metrics in expandable sections
+                    with st.expander("💵 Dollar Amounts", expanded=True):
+                        if not dollar_metrics.empty:
+                            st.dataframe(dollar_metrics, use_container_width=True)
+                        else:
+                            st.info("No dollar amounts found")
+                            
+                    with st.expander("📊 Percentages", expanded=True):
+                        if not percentage_metrics.empty:
+                            st.dataframe(percentage_metrics, use_container_width=True)
+                        else:
+                            st.info("No percentages found")
+                            
+                    if not other_metrics.empty:
+                        with st.expander("🔢 Other Metrics"):
+                            st.dataframe(other_metrics, use_container_width=True)
+                
+                # Also show the raw features for completeness
+                st.subheader("Raw Extracted Features")
+                features, feature_names = feature_extractor.extract_features(sample_df)
+                
+                if isinstance(features, dict):
+                    # Dictionary format
+                    feature_df = pd.DataFrame({
+                        'Feature': list(features.keys()),
+                        'Value': list(features.values())
+                    })
+                    st.dataframe(feature_df)
+                elif isinstance(features, pd.DataFrame):
+                    # DataFrame format
+                    st.dataframe(features)
+                elif isinstance(features, np.ndarray):
+                    # NumPy array format with feature_names
+                    if feature_names is not None:
+                        if len(features.shape) == 2:  # 2D array (multiple samples)
+                            feature_df = pd.DataFrame(features, columns=feature_names)
+                        else:  # 1D array (single sample)
+                            feature_df = pd.DataFrame([features], columns=feature_names)
+                        st.dataframe(feature_df)
+                    else:
+                        st.write("Features extracted as NumPy array but no feature names provided")
+                else:
+                    st.write(f"Features extracted but format not recognized: {type(features)}")
+                    st.write("Feature data preview:")
+                    st.write(features)
             
-            if isinstance(features, dict):
-                feature_df = pd.DataFrame({
-                    'Feature': list(features.keys()),
-                    'Value': list(features.values())
-                })
-                st.dataframe(feature_df)
-            elif isinstance(features, pd.DataFrame):
-                st.dataframe(features)
-            else:
-                st.write("Features extracted but format not recognized")
+            except Exception as e:
+                st.error(f"Error extracting features: {str(e)}")
                 
     def render_about(self):
         """Render the about page with dashboard information and documentation.
@@ -1773,26 +1945,27 @@ class EarningsReportDashboard:
         # Quick links
         col1, col2, col3 = st.columns(3)
         
+        # Quick links in render_home()
         with col1:
             st.subheader("Text Analysis")
             st.markdown("Analyze individual earnings report text for sentiment, topics, and key features.")
             if st.button("Go to Text Analysis"):
-                st.session_state.page = "Text Analysis"
-                st.experimental_rerun()
-        
+                st.session_state.nav_target = "Text Analysis"  # Changed to nav_target
+                st.rerun()
+
         with col2:
             st.subheader("Model Zoo")
             st.markdown("Access and load pre-trained models for different analysis tasks.")
             if st.button("Go to Model Zoo"):
-                st.session_state.page = "Model Zoo"
-                st.experimental_rerun()
+                st.session_state.nav_target = "Model Zoo"  # Changed to nav_target
+                st.rerun()
                 
         with col3:
             st.subheader("Prediction Simulator")
             st.markdown("Simulate predictions on custom earnings report text.")
             if st.button("Go to Prediction Simulator"):
-                st.session_state.page = "Prediction Simulator"                
-                st.experimental_rerun()
+                st.session_state.nav_target = "Prediction Simulator"  # Changed to nav_target
+                st.rerun()
     
     def run(self):
         """Run the dashboard application and handle navigation between pages.

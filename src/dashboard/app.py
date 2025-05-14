@@ -47,30 +47,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger('dashboard')
 
+
 # Import configuration values
 try:
-    from ..config import (MODEL_DIR, OUTPUT_DIR, FIGURE_DPI, MAX_WORD_CLOUD_WORDS,
-                      EMBEDDING_MODEL_PATH, SENTIMENT_MODEL_PATH, TOPIC_MODEL_PATH)
-except ImportError:
-    # Handle the case when running directly
+    # First try absolute import which works on Streamlit Cloud
     from src.config import (MODEL_DIR, OUTPUT_DIR, FIGURE_DPI, MAX_WORD_CLOUD_WORDS,
                       EMBEDDING_MODEL_PATH, SENTIMENT_MODEL_PATH, TOPIC_MODEL_PATH)
-
-# Import dashboard utils
-try:
-    from .dashboard_helpers import (
-        load_models, 
-        get_available_models,
-        format_topics,
-        classify_sentiment,
-        format_sentiment_result,
-        extract_topic_visualization,
-        get_feature_importance_plot,
-        get_wordcloud_for_topic,
-        create_prediction_simulator,
-        create_topic_explorer
-    )
 except ImportError:
+    # Then try relative import for local development
+    try:
+        from ..config import (MODEL_DIR, OUTPUT_DIR, FIGURE_DPI, MAX_WORD_CLOUD_WORDS,
+                          EMBEDDING_MODEL_PATH, SENTIMENT_MODEL_PATH, TOPIC_MODEL_PATH)
+    except ImportError:
+        # As a last resort, define minimal config directly
+        import os
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        MODEL_DIR = os.path.join(BASE_DIR, "models")
+        OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+        FIGURE_DPI = 300
+        MAX_WORD_CLOUD_WORDS = 100
+        EMBEDDING_MODEL_PATH = os.path.join(MODEL_DIR, "embedding_model.pkl")
+        SENTIMENT_MODEL_PATH = os.path.join(MODEL_DIR, "sentiment_model.pkl")
+        TOPIC_MODEL_PATH = os.path.join(MODEL_DIR, "topic_model.pkl")
+
+# Import dashboard helpers with similar fallback structure
+try:
     from src.dashboard.dashboard_helpers import (
         load_models, 
         get_available_models,
@@ -83,6 +84,24 @@ except ImportError:
         create_prediction_simulator,
         create_topic_explorer
     )
+except ImportError:
+    try:
+        from .dashboard_helpers import (
+            load_models, 
+            get_available_models,
+            format_topics,
+            classify_sentiment,
+            format_sentiment_result,
+            extract_topic_visualization,
+            get_feature_importance_plot,
+            get_wordcloud_for_topic,
+            create_prediction_simulator,
+            create_topic_explorer
+        )
+    except ImportError:
+        # Simple warning if helpers can't be imported
+        import streamlit as st
+        st.error("Could not import dashboard helpers. Limited functionality available.")
 
 # Import NLP components
 try:

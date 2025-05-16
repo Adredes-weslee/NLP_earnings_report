@@ -319,20 +319,7 @@ class EarningsReportDashboard:
             st.sidebar.subheader("Sample Data")
             st.sidebar.info(f"✓ {len(self.sample_data)} samples available")
         
-        # Upload option
-        st.sidebar.subheader("Upload Data")
-        uploaded_file = st.sidebar.file_uploader(
-            "Upload a CSV file with earnings report data",
-            type=["csv"]
-        )
-        
-        if uploaded_file is not None:
-            try:
-                data = pd.read_csv(uploaded_file)
-                st.sidebar.success(f"✓ Loaded {len(data)} records")
-                return page, data
-            except Exception as e:
-                st.sidebar.error(f"Error loading file: {str(e)}")
+
         
         return page, None
     
@@ -444,22 +431,65 @@ class EarningsReportDashboard:
             try:
                 sentiment_result = classify_sentiment(text, self.models['sentiment'])
                 result_df = format_sentiment_result(sentiment_result)
-                
-                # Display as bar chart
-                fig = px.bar(
-                    result_df, 
-                    x='Score', 
-                    y='Dimension',
-                    orientation='h',
-                    color='Score',
-                    color_continuous_scale='RdBu',
-                    title='Sentiment Analysis Results'
-                )
-                fig.update_layout(height=400)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Also display as table
                 st.dataframe(result_df)
+                
+                # Robustly extract sentiment scores for visualization
+                key_map = {
+                    'pos': ['pos', 'positive'],
+                    'neu': ['neu', 'neutral'],
+                    'neg': ['neg', 'negative']
+                }
+                def get_score(keys, result):
+                    for k in keys:
+                        if k in result:
+                            return result[k]
+                    return 0
+                pos_score = get_score(key_map['pos'], sentiment_result)
+                neu_score = get_score(key_map['neu'], sentiment_result)
+                neg_score = get_score(key_map['neg'], sentiment_result)
+                # If all are zero, try to use net_sentiment as a fallback
+                if pos_score == 0 and neu_score == 0 and neg_score == 0:
+                    if 'net_sentiment' in sentiment_result:
+                        # Map net_sentiment to pos/neg
+                        if sentiment_result['net_sentiment'] > 0:
+                            pos_score = sentiment_result['net_sentiment']
+                        elif sentiment_result['net_sentiment'] < 0:
+                            neg_score = abs(sentiment_result['net_sentiment'])
+                        else:
+                            neu_score = 1
+                # Normalize scores if needed
+                total = pos_score + neu_score + neg_score
+                if total > 0:
+                    pos_score /= total
+                    neu_score /= total
+                    neg_score /= total
+                sentiment_plot_df = pd.DataFrame({
+                    'Sentiment': ['Positive', 'Neutral', 'Negative'],
+                    'Score': [pos_score, neu_score, neg_score]
+                })
+                try:
+                    fig = px.bar(
+                        sentiment_plot_df,
+                        x='Score',
+                        y='Sentiment', 
+                        orientation='h',
+                        color='Sentiment',
+                        color_discrete_map={
+                            'Positive': 'green',
+                            'Neutral': 'gray',
+                            'Negative': 'red'
+                        },
+                        title='Sentiment Breakdown'
+                    )
+                    fig.update_layout(
+                        xaxis_range=[0, 1],
+                        height=300,
+                        margin=dict(l=20, r=20, t=40, b=20)
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error creating sentiment visualization: {str(e)}")
+                    st.bar_chart(sentiment_plot_df.set_index('Sentiment'))
                 
             except Exception as e:
                 st.error(f"Error in sentiment analysis: {str(e)}")
@@ -474,26 +504,86 @@ class EarningsReportDashboard:
                 # Extract topics from the text
                 topics = self.models['topic'].extract_topics(corpus)
                 
-                if topics is not None:
-                    # Display top topics for this document
-                    st.subheader("Document Topics")
-                    
-                    # If topics is a list of (topic_id, score) tuples
-                    if isinstance(topics, list) and len(topics) > 0 and isinstance(topics[0], tuple):
-                        topics_df = pd.DataFrame(topics, columns=['Topic ID', 'Score'])
-                        topics_df['Topic Words'] = topics_df['Topic ID'].apply(
-                            lambda tid: ", ".join(self.models['topic'].get_topic_words(tid, 10))
-                        )
-                        
-                        st.dataframe(topics_df)
-                    else:
-                        st.write("Topics extracted but format not recognized")
+                formatted_topics = []
+                # Handle different possible formats
+                if isinstance(topics, list):
+                    for topic_entry in topics:
+                        try:
+                            # Handle list format [topic_id, score]
+                            if isinstance(topic_entry, list) and len(topic_entry) >= 2:
+                                topic_id = int(topic_entry[0])
+                                score = float(topic_entry[1])
+                            # Handle tuple format (topic_id, score)
+                            elif isinstance(topic_entry, tuple) and len(topic_entry) >= 2:
+                                topic_id = int(topic_entry[0])
+                                score = float(topic_entry[1])
+                            # Handle dictionary format
+                            elif isinstance(topic_entry, dict) and 'id' in topic_entry and 'score' in topic_entry:
+                                topic_id = int(topic_entry['id'])
+                                score = float(topic_entry['score'])
+                            else:
+                                continue
+                            # Get topic words
+                            if hasattr(self.models['topic'], 'get_topic_words'):
+                                topic_words = self.models['topic'].get_topic_words(topic_id, 8)
+                                if isinstance(topic_words, list):
+                                    if topic_words and isinstance(topic_words[0], tuple):
+                                        # (word, score) format
+                                        topic_label = ", ".join([word for word, _ in topic_words[:8]])
+                                    else:
+                                        topic_label = ", ".join(topic_words[:8])
+                                else:
+                                    topic_label = f"Topic {topic_id}"
+                            else:
+                                topic_label = f"Topic {topic_id}"
+                            formatted_topics.append({
+                                "Topic ID": topic_id,
+                                "Topic Label": topic_label,
+                                "Relevance": score
+                            })
+                        except Exception as e:
+                            st.warning(f"Error formatting topic: {str(e)}")
+                # If no topics were found or formatted, try simulating topics
+                if not formatted_topics:
+                    st.info("No topics detected in the original format. Attempting to extract topics based on content...")
+                    # Simple keyword-based topic simulation
+                    keywords = {
+                        "Financial Performance": ["revenue", "profit", "earnings", "financial", "quarter", "growth", "income"],
+                        "Market Position": ["market", "share", "competition", "industry", "position", "leader"],
+                        "Product Development": ["product", "development", "innovation", "launch", "roadmap"],
+                        "Operations": ["operations", "production", "supply", "chain", "efficiency", "cost"],
+                        "Future Outlook": ["outlook", "guidance", "future", "expect", "forecast", "anticipate"]
+                    }
+                    # Extract simulated topics based on keyword matches
+                    for topic_name, words in keywords.items():
+                        text_lower = text.lower()
+                        matches = sum(1 for word in words if word in text_lower)
+                        if matches >= 2:  # At least 2 keyword matches to consider it a relevant topic
+                            relevance = min(0.95, matches * 0.15)  # Calculate relevance score
+                            formatted_topics.append({
+                                "Topic ID": list(keywords.keys()).index(topic_name),
+                                "Topic Label": f"{topic_name}: {', '.join(words[:5])}",
+                                "Relevance": relevance
+                            })
+                # Display topics
+                if formatted_topics:
+                    topics_df = pd.DataFrame(formatted_topics)
+                    st.write("### Document Topics")
+                    st.dataframe(topics_df)
+                    # Create a visualization
+                    fig = px.bar(
+                        topics_df,
+                        x="Relevance",
+                        y="Topic ID",
+                        orientation='h',
+                        title="Topic Distribution",
+                        labels={"Topic ID": "Topic", "Relevance": "Score"}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No clear topics identified in this text")
+                    st.write("Consider trying a different topic model or using a longer text sample.")
                 
-                # Visualize topics
-                html = extract_topic_visualization(self.models['topic'])
-                if html:
-                    st.components.v1.html(html, height=800)
-                    
             except Exception as e:
                 st.error(f"Error in topic analysis: {str(e)}")
         
@@ -675,7 +765,7 @@ class EarningsReportDashboard:
         """)
         
         # Create tabs for different model categories
-        model_tabs = st.tabs(["Sentiment Models", "Topic Models", "Feature Extraction Models", "Custom Models"])
+        model_tabs = st.tabs(["Sentiment Models", "Topic Models", "Feature Extraction Models"])
         
         # Sentiment Models Tab
         with model_tabs[0]:
@@ -797,39 +887,6 @@ class EarningsReportDashboard:
                                     st.error("Feature extraction model not loaded")
             else:
                 st.info("No feature extraction models available")
-        
-        # Custom Models Tab
-        with model_tabs[3]:
-            st.subheader("Custom Model Upload")
-            
-            st.markdown("""
-            ### Upload Your Custom Models
-            
-            You can upload your own pre-trained models for use in this dashboard.
-            Supported formats: .pkl, .joblib, .h5
-            """)
-            
-            uploaded_model = st.file_uploader(
-                "Upload a custom model",
-                type=["pkl", "joblib", "h5"]
-            )
-            
-            if uploaded_model is not None:
-                st.success(f"Model {uploaded_model.name} uploaded successfully!")
-                
-                # Model configuration
-                st.subheader("Model Configuration")
-                
-                model_type = st.selectbox(
-                    "Model Type",
-                    ["Sentiment Analysis", "Topic Modeling", "Feature Extraction", "Other"]
-                )
-                
-                model_name = st.text_input("Model Name", f"Custom_{model_type.replace(' ', '')}")
-                
-                if st.button("Register Model"):
-                    st.success(f"Model {model_name} registered as {model_type} model!")
-                    st.info("Note: This is a demo. Custom model integration requires additional setup.")
     
     def render_topic_explorer(self):
         """Render the interactive topic explorer for analyzing document themes.
@@ -900,7 +957,6 @@ class EarningsReportDashboard:
                     words_df = pd.DataFrame(topic_words, columns=["Word", "Score"])
                     st.dataframe(words_df)
                 else:
-                    # Just words
                     st.write(", ".join(topic_words))
         
         with col2:
@@ -1169,21 +1225,36 @@ class EarningsReportDashboard:
                             result_df = format_sentiment_result(sentiment_result)
                             st.dataframe(result_df)
                             
-                            # Debug the sentiment result to check what's available
-                            st.write("Debug - Sentiment Result:", sentiment_result)
-                            
                             # Create a more reliable visualization using explicit values
-                            pos_score = sentiment_result.get('pos', 0) 
-                            neu_score = sentiment_result.get('neu', 0)
-                            neg_score = sentiment_result.get('neg', 0)
-                            
-                            # Create explicit DataFrame for visualization
+                            # Try to extract common keys, fallback to any available keys
+                            key_map = {
+                                'pos': ['pos', 'positive'],
+                                'neu': ['neu', 'neutral'],
+                                'neg': ['neg', 'negative']
+                            }
+                            def get_score(keys, result):
+                                for k in keys:
+                                    if k in result:
+                                        return result[k]
+                                return 0
+                            pos_score = get_score(key_map['pos'], sentiment_result)
+                            neu_score = get_score(key_map['neu'], sentiment_result)
+                            neg_score = get_score(key_map['neg'], sentiment_result)
+                            # If all are zero, try to use net_sentiment as a fallback
+                            if pos_score == 0 and neu_score == 0 and neg_score == 0:
+                                if 'net_sentiment' in sentiment_result:
+                                    # Map net_sentiment to pos/neg
+                                    if sentiment_result['net_sentiment'] > 0:
+                                        pos_score = sentiment_result['net_sentiment']
+                                    elif sentiment_result['net_sentiment'] < 0:
+                                        neg_score = abs(sentiment_result['net_sentiment'])
+                                    else:
+                                        neu_score = 1
+
                             sentiment_plot_df = pd.DataFrame({
                                 'Sentiment': ['Positive', 'Neutral', 'Negative'],
                                 'Score': [pos_score, neu_score, neg_score]
                             })
-                            
-                            # Add a more robust visualization
                             try:
                                 fig = px.bar(
                                     sentiment_plot_df,
@@ -1206,34 +1277,25 @@ class EarningsReportDashboard:
                                 st.plotly_chart(fig, use_container_width=True)
                             except Exception as e:
                                 st.error(f"Error creating sentiment visualization: {str(e)}")
-                                
-                                # Fallback to simpler visualization
-                                st.write("Fallback visualization:")
                                 st.bar_chart(sentiment_plot_df.set_index('Sentiment'))
-                            
                         # Extract key sentiment phrases
                         st.subheader("Key Sentiment Phrases")
-                        
                         # Simulate key phrases
                         positive_phrases = []
                         negative_phrases = []
-                        
                         text_sentences = earnings_text.split('.')
                         for sentence in text_sentences:
                             sentence = sentence.strip()
                             if len(sentence) < 5:
                                 continue
-                                
                             if any(pos_word in sentence.lower() for pos_word in ["growth", "increase", "exceeded", "strong", "pleased"]):
                                 positive_phrases.append(sentence)
                             elif any(neg_word in sentence.lower() for neg_word in ["decline", "short", "challenge", "negative", "pressure"]):
                                 negative_phrases.append(sentence)
-                                
                         if positive_phrases:
                             st.markdown("#### Positive Phrases")
                             for phrase in positive_phrases[:3]:  # Limit to top 3
                                 st.markdown(f"- *\"{phrase}\"*")
-                                
                         if negative_phrases:
                             st.markdown("#### Negative Phrases")
                             for phrase in negative_phrases[:3]:  # Limit to top 3
@@ -1249,13 +1311,7 @@ class EarningsReportDashboard:
                         if 'topic' in self.models:
                             # Get topics from model
                             topics = self.models['topic'].extract_topics([earnings_text])
-                            
-                            # Debug the topic format
-                            st.write("Debug - Topic Format:", type(topics))
-                            st.write("Debug - Topic Content:", topics)
-                            
                             formatted_topics = []
-                            
                             # Handle different possible formats
                             if isinstance(topics, list):
                                 for topic_entry in topics:
@@ -1274,7 +1330,6 @@ class EarningsReportDashboard:
                                             score = float(topic_entry['score'])
                                         else:
                                             continue
-                                        
                                         # Get topic words
                                         if hasattr(self.models['topic'], 'get_topic_words'):
                                             topic_words = self.models['topic'].get_topic_words(topic_id, 8)
@@ -1288,7 +1343,6 @@ class EarningsReportDashboard:
                                                 topic_label = f"Topic {topic_id}"
                                         else:
                                             topic_label = f"Topic {topic_id}"
-                                        
                                         formatted_topics.append({
                                             "Topic ID": topic_id,
                                             "Topic Label": topic_label,
@@ -1296,11 +1350,9 @@ class EarningsReportDashboard:
                                         })
                                     except Exception as e:
                                         st.warning(f"Error formatting topic: {str(e)}")
-                            
                             # If no topics were found or formatted, try simulating topics
                             if not formatted_topics:
                                 st.info("No topics detected in the original format. Attempting to extract topics based on content...")
-                                
                                 # Simple keyword-based topic simulation
                                 keywords = {
                                     "Financial Performance": ["revenue", "profit", "earnings", "financial", "quarter", "growth", "income"],
@@ -1309,7 +1361,6 @@ class EarningsReportDashboard:
                                     "Operations": ["operations", "production", "supply", "chain", "efficiency", "cost"],
                                     "Future Outlook": ["outlook", "guidance", "future", "expect", "forecast", "anticipate"]
                                 }
-                                
                                 # Extract simulated topics based on keyword matches
                                 for topic_name, words in keywords.items():
                                     text_lower = earnings_text.lower()
@@ -1321,13 +1372,11 @@ class EarningsReportDashboard:
                                             "Topic Label": f"{topic_name}: {', '.join(words[:5])}",
                                             "Relevance": relevance
                                         })
-                            
                             # Display topics
                             if formatted_topics:
                                 topics_df = pd.DataFrame(formatted_topics)
                                 st.write("### Document Topics")
                                 st.dataframe(topics_df)
-                                
                                 # Create a visualization
                                 fig = px.bar(
                                     topics_df,
@@ -1401,7 +1450,6 @@ class EarningsReportDashboard:
                                             features_df = pd.DataFrame(features, columns=feature_names)
                                         else:
                                             features_df = pd.DataFrame([features], columns=feature_names)
-                                        
                                         # Only show non-zero features
                                         non_zero_cols = features_df.loc[:, (features_df != 0).any(axis=0)].columns
                                         if len(non_zero_cols) > 0:

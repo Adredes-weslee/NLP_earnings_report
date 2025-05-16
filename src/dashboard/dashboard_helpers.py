@@ -129,14 +129,26 @@ def load_models() -> Dict[str, Any]:
         
         # Try to load sample data
         try:
-            train_files = glob.glob(os.path.join(PROCESSED_DATA_DIR, "train_*.csv"))
-            if train_files:
-                # Sort by modification time and get the most recent
-                most_recent = max(train_files, key=os.path.getmtime)
-                models['sample_data'] = pd.read_csv(most_recent)
-                logger.info(f"Loaded {len(models['sample_data'])} sample data records from {most_recent}")
+            # First try to load the smaller sample dataset specifically created for the dashboard
+            sample_file = os.path.join(PROCESSED_DATA_DIR, "sample_train_edad7fda80.csv")
+            
+            if os.path.exists(sample_file):
+                # Load the smaller sample file if it exists
+                models['sample_data'] = pd.read_csv(sample_file)
+                logger.info(f"Loaded {len(models['sample_data'])} sample data records from smaller sample file: {sample_file}")
             else:
-                logger.warning(f"No training data files found in {PROCESSED_DATA_DIR}")
+                # Fall back to looking for any train files, but limit the number of rows
+                train_files = glob.glob(os.path.join(PROCESSED_DATA_DIR, "train_*.csv"))
+                if train_files:
+                    # Sort by modification time and get the most recent
+                    most_recent = max(train_files, key=os.path.getmtime)
+                    
+                    # Load just 1000 rows from the large file to keep memory usage reasonable
+                    models['sample_data'] = pd.read_csv(most_recent, nrows=1000)
+                    logger.info(f"Loaded {len(models['sample_data'])} sample data records (limited) from {most_recent}")
+                    logger.warning("Using limited rows from full training dataset. Consider running create_dashboard_sample.py to create a proper sample.")
+                else:
+                    logger.warning(f"No training data files found in {PROCESSED_DATA_DIR}")
         except Exception as e:
             logger.warning(f"Failed to load sample data: {str(e)}")
         

@@ -19,11 +19,14 @@ import os
 import joblib
 import sys
 from typing import List, Dict, Union, Optional, Tuple
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+import pickle
 
 # Import configuration values
 from ..config import (MAX_FEATURES, NGRAM_RANGE, MAX_DOC_FREQ, EMBEDDING_MODEL_PATH,
                   MODEL_DIR, RANDOM_STATE)
+
+# Import the centralized NLPProcessor
+from .nlp_processing import NLPProcessor
 
 # Optional imports for more advanced embedding techniques
 try:
@@ -46,14 +49,15 @@ class EmbeddingProcessor:
     Attributes:
         method (str): The embedding method being used.
         model_name (str): The name of the transformer model if applicable.
-        vectorizer: The vectorizer object for traditional embeddings.
+        nlp_processor (NLPProcessor): Centralized processor for vectorization.
         transformer_model: The loaded transformer model if applicable.
         tokenizer: The tokenizer associated with the transformer model.
         embedding_dim (int): Dimensionality of the embedding vectors.
         vocab (list): Vocabulary used for traditional embedding methods.
     """
     
-    def __init__(self, method: str = 'tfidf', model_name: str = 'all-MiniLM-L6-v2'):
+    def __init__(self, method: str = 'tfidf', model_name: str = 'all-MiniLM-L6-v2',
+                nlp_processor: NLPProcessor = None):
         """Initialize the embedding processor with specified method and model.
         
         Args:
@@ -64,15 +68,19 @@ class EmbeddingProcessor:
                 Defaults to 'tfidf'.
             model_name (str): Name of transformer model to use if method is 'transformer'.
                 Defaults to 'all-MiniLM-L6-v2', a good balance of quality and speed.
+            nlp_processor (NLPProcessor, optional): Centralized NLP processor to use for
+                vectorization. If None, a new one will be created when needed.
                 
         Example:
-            >>> processor = EmbeddingProcessor(method='tfidf')
+            >>> # Using shared NLP processor
+            >>> nlp_proc = NLPProcessor(max_features=5000)
+            >>> processor = EmbeddingProcessor(method='tfidf', nlp_processor=nlp_proc)
             >>> processor.fit(documents)
             >>> embeddings = processor.transform(new_documents)
         """
         self.method = method
         self.model_name = model_name
-        self.vectorizer = None
+        self.nlp_processor = nlp_processor
         self.transformer_model = None
         self.tokenizer = None
         self.embedding_dim = None
@@ -89,9 +97,8 @@ class EmbeddingProcessor:
         """Fit the embedding model on the provided texts.
         
         This method trains the embedding model on a corpus of documents.
-        For bag-of-words and TF-IDF, it builds the vocabulary and calculates
-        document frequencies. For transformer-based methods, it loads the
-        pre-trained model.
+        For bag-of-words and TF-IDF, it uses the centralized NLPProcessor.
+        For transformer-based methods, it loads the pre-trained model.
         
         Args:
             texts (List[str]): List of text documents to fit the model on.
@@ -114,27 +121,24 @@ class EmbeddingProcessor:
             >>> processor.fit(training_documents)
         """
         logger.info(f"Fitting {self.method} embedding model on {len(texts)} texts")
-          # Prepare common kwargs with config values if not already provided
-        common_kwargs = {
-            'max_features': max_features,
-            'ngram_range': NGRAM_RANGE,
-            'max_df': MAX_DOC_FREQ
-        }
-        # Update with any user-provided kwargs
-        common_kwargs.update(kwargs)
         
-        if self.method == 'bow':
-            self.vectorizer = CountVectorizer(**common_kwargs)
-            self.vectorizer.fit(texts)
-            self.vocab = self.vectorizer.get_feature_names_out()
-            self.embedding_dim = len(self.vocab)
-            
-        elif self.method == 'tfidf':
-            self.vectorizer = TfidfVectorizer(**common_kwargs)
-            self.vectorizer.fit(texts)
-            self.vocab = self.vectorizer.get_feature_names_out()
-            self.embedding_dim = len(self.vocab)
-            
+        if self.method in ['bow', 'tfidf']:
+            # Use the centralized NLPProcessor for vectorization
+            if self.nlp_processor is None:
+                self.nlp_processor = NLPProcessor(max_features=max_features, **kwargs)
+                
+            if self.method == 'bow':
+                # Get document-term matrix from NLPProcessor
+                dtm, vocab = self.nlp_processor.create_document_term_matrix(texts)
+                self.vocab = vocab
+                self.embedding_dim = len(vocab)
+                
+            elif self.method == 'tfidf':
+                # Get TF-IDF matrix from NLPProcessor
+                tfidf_matrix, vocab = self.nlp_processor.create_tfidf_matrix(texts)
+                self.vocab = vocab
+                self.embedding_dim = len(vocab)
+                
         elif self.method == 'transformer':
             if not TRANSFORMERS_AVAILABLE:
                 raise ImportError("Transformers library not available")
@@ -150,12 +154,13 @@ class EmbeddingProcessor:
                 raise
         
         return self
+    
     def transform(self, texts: List[str]) -> np.ndarray:
         """Transform texts to embeddings using the fitted model.
         
         This method converts input texts to numerical embeddings using the
         previously fit model. The output format depends on the embedding method:
-        - For 'bow' and 'tfidf': Returns sparse matrices
+        - For 'bow' and 'tfidf': Returns sparse matrices using NLPProcessor
         - For 'transformer': Returns dense matrices
         
         Args:
@@ -181,10 +186,17 @@ class EmbeddingProcessor:
             
         logger.info(f"Transforming {len(texts)} texts to embeddings")
         
-        if self.method in ['bow', 'tfidf']:
-            if self.vectorizer is None:
+        if self.method == 'bow':
+            if self.nlp_processor is None:
                 raise ValueError("Model not fitted. Call fit() first.")
-            return self.vectorizer.transform(texts)
+            dtm, _ = self.nlp_processor.create_document_term_matrix(texts, fit=False)
+            return dtm
+            
+        elif self.method == 'tfidf':
+            if self.nlp_processor is None:
+                raise ValueError("Model not fitted. Call fit() first.")
+            tfidf_matrix, _ = self.nlp_processor.create_tfidf_matrix(texts, fit=False)
+            return tfidf_matrix
             
         elif self.method == 'transformer':
             if self.transformer_model is None:
@@ -200,7 +212,7 @@ class EmbeddingProcessor:
                 
             return np.vstack(embeddings)
         
-    def fit_transform(self, texts: List[str], max_features: int = 10000, **kwargs) -> np.ndarray:
+    def fit_transform(self, texts: List[str], max_features: int = MAX_FEATURES, **kwargs) -> np.ndarray:
         """Fit the model and transform the texts in one step.
         
         This is a convenience method that calls fit() followed by transform()
@@ -212,7 +224,7 @@ class EmbeddingProcessor:
             max_features (int, optional): Maximum vocabulary size for BoW/TF-IDF.
                 For 'bow' and 'tfidf' methods, this limits the size of the vocabulary.
                 Higher values capture more terms but increase dimensionality.
-                Defaults to 10000.
+                Defaults to MAX_FEATURES from config.
             **kwargs: Additional arguments for the vectorizer or transformer.
                 Common options include:
                 - ngram_range: Tuple specifying n-gram range, e.g. (1, 2) for unigrams and bigrams
@@ -236,6 +248,26 @@ class EmbeddingProcessor:
         """
         self.fit(texts, max_features, **kwargs)
         return self.transform(texts)
+    
+    def get_document_term_matrix(self, texts):
+        """Get the document-term matrix for texts using the current embedding method.
+        
+        Args:
+            texts (List[str]): Text documents to vectorize
+            
+        Returns:
+            scipy.sparse.matrix: Document-term matrix
+            
+        Example:
+            >>> processor = EmbeddingProcessor(method='tfidf')
+            >>> processor.fit(training_texts)
+            >>> dtm = processor.get_document_term_matrix(new_texts)
+        """
+        if self.method == 'tfidf':
+            dtm, _ = self.nlp_processor.create_tfidf_matrix(texts, fit=False)
+        else:
+            dtm, _ = self.nlp_processor.create_document_term_matrix(texts, fit=False)
+        return dtm
     
     def get_document_embeddings(self, df: pd.DataFrame, text_col: str) -> np.ndarray:
         """Get document embeddings for texts in a dataframe column.
@@ -266,9 +298,9 @@ class EmbeddingProcessor:
         """Save the embedding model to disk.
         
         This method serializes the embedding model and its configuration
-        to the specified directory. For traditional models like TF-IDF,
-        it saves the vectorizer. For transformer models, it saves the
-        model configuration and a reference to the pre-trained model.
+        to the specified directory. For traditional models, it saves the
+        NLPProcessor. For transformer models, it saves the model configuration
+        and a reference to the pre-trained model.
         
         Args:
             path (str, optional): Directory path to save the model.
@@ -298,7 +330,9 @@ class EmbeddingProcessor:
         
         # Save model-specific components
         if self.method in ['bow', 'tfidf']:
-            joblib.dump(self.vectorizer, os.path.join(path, 'vectorizer.joblib'))
+            # Save the NLPProcessor if it exists
+            if self.nlp_processor is not None:
+                self.nlp_processor.save(os.path.join(path, 'nlp_processor'))
         elif self.method == 'transformer':
             # For transformer models, we just save the model name as they're large
             # They will be reloaded from the HuggingFace hub
@@ -344,11 +378,31 @@ class EmbeddingProcessor:
         
         # Load model-specific components
         if instance.method in ['bow', 'tfidf']:
-            instance.vectorizer = joblib.load(os.path.join(path, 'vectorizer.joblib'))
-            if hasattr(instance.vectorizer, 'get_feature_names_out'):
-                instance.vocab = instance.vectorizer.get_feature_names_out()
-            else:
-                instance.vocab = instance.vectorizer.get_feature_names()
+            # Try to load the NLPProcessor
+            try:
+                nlp_proc_path = os.path.join(path, 'nlp_processor')
+                instance.nlp_processor = NLPProcessor.load(nlp_proc_path)
+                instance.vocab = instance.nlp_processor.vocab
+            except (FileNotFoundError, AttributeError) as e:
+                logger.warning(f"Could not load NLPProcessor: {str(e)}")
+                # For backward compatibility with old saved models
+                if os.path.exists(os.path.join(path, 'vectorizer.joblib')):
+                    logger.info("Loading legacy vectorizer format")
+                    instance.nlp_processor = NLPProcessor()
+                    if instance.method == 'bow':
+                        instance.nlp_processor.count_vectorizer = joblib.load(os.path.join(path, 'vectorizer.joblib'))
+                    else:
+                        instance.nlp_processor.tfidf_vectorizer = joblib.load(os.path.join(path, 'vectorizer.joblib'))
+                    
+                    # Get vocabulary from the vectorizer
+                    vectorizer = instance.nlp_processor.count_vectorizer or instance.nlp_processor.tfidf_vectorizer
+                    if hasattr(vectorizer, 'get_feature_names_out'):
+                        instance.vocab = vectorizer.get_feature_names_out()
+                        instance.nlp_processor.vocab = instance.vocab
+                    else:
+                        instance.vocab = vectorizer.get_feature_names()
+                        instance.nlp_processor.vocab = instance.vocab
+                    
         elif instance.method == 'transformer':
             if not TRANSFORMERS_AVAILABLE:
                 raise ImportError("Transformers library required but not available")

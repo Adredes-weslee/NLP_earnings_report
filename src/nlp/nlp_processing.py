@@ -46,7 +46,6 @@ class NLPProcessor:
         count_vectorizer (CountVectorizer): Vectorizer for creating document-term matrices
         tfidf_vectorizer (TfidfVectorizer): Vectorizer for TF-IDF weighted representations 
         vocab (list): Shared vocabulary across vectorizers
-        text_processor: Reference to the TextProcessor for text cleaning
     """
     
     def __init__(self, max_features: int = MAX_FEATURES, 
@@ -82,29 +81,16 @@ class NLPProcessor:
         self.count_vectorizer = None
         self.tfidf_vectorizer = None
         self.vocab = None
-        self.text_processor = None
         
         # Initialize stopwords
-        self.stop_words = set(stopwords.words('english'))
-        # Add financial stopwords
-        self.financial_stopwords = {'company', 'quarter', 'year', 'financial', 'reported', 'period',
-                                  'quarter', 'fiscal', 'results', 'earnings', 'reports', 'press', 
-                                  'release', 'corporation', 'announces', 'announced', 'today'}
-        self.stop_words.update(self.financial_stopwords)
+        self.stop_words = list(set(stopwords.words('english')))
+        # # Add financial stopwords
+        # self.financial_stopwords = {'company', 'quarter', 'year', 'financial', 'reported', 'period',
+        #                           'quarter', 'fiscal', 'results', 'earnings', 'reports', 'press', 
+        #                           'release', 'corporation', 'announces', 'announced', 'today'}
+        # self.stop_words.update(self.financial_stopwords)
         
         logger.info(f"Initialized NLPProcessor with max_features={max_features}")
-        
-    def set_text_processor(self, text_processor):
-        """Set the TextProcessor instance for text cleaning.
-        
-        Args:
-            text_processor: An instance of TextProcessor for text cleaning
-            
-        Returns:
-            self: For method chaining
-        """
-        self.text_processor = text_processor
-        return self
         
     def create_document_term_matrix(self, texts: List[str], 
                                    fit: bool = True,

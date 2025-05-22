@@ -43,6 +43,7 @@ from ..nlp.embedding import EmbeddingProcessor
 from ..nlp.sentiment import SentimentAnalyzer
 from ..nlp.topic_modeling import TopicModeler
 from ..nlp.feature_extraction import FeatureExtractor
+from ..nlp.nlp_processing import NLPProcessor
 
 logger = logging.getLogger('dashboard.utils')
 
@@ -85,6 +86,11 @@ def load_models() -> Dict[str, Any]:
             embedding_path = EMBEDDING_MODEL_PATH
             models['embedding'] = EmbeddingProcessor.load(embedding_path)
             logger.info(f"Embedding model loaded from {embedding_path}")
+            
+            # Store the NLPProcessor for reuse by other components
+            if hasattr(models['embedding'], 'nlp_processor') and models['embedding'].nlp_processor is not None:
+                models['nlp_processor'] = models['embedding'].nlp_processor
+                logger.info("Using NLPProcessor from embedding model")
         except Exception as e:
             logger.warning(f"Failed to load embedding model: {str(e)}")
         
@@ -92,6 +98,11 @@ def load_models() -> Dict[str, Any]:
         try:
             sentiment_path = SENTIMENT_MODEL_PATH
             models['sentiment'] = SentimentAnalyzer.load(sentiment_path)
+            
+            # Connect to NLPProcessor if available
+            if 'nlp_processor' in models and hasattr(models['sentiment'], 'set_nlp_processor'):
+                models['sentiment'].set_nlp_processor(models['nlp_processor'])
+                
             logger.info(f"Sentiment model loaded from {sentiment_path}")
         except Exception as e:
             logger.warning(f"Failed to load sentiment model: {str(e)}")
@@ -100,6 +111,11 @@ def load_models() -> Dict[str, Any]:
         try:
             topic_path = TOPIC_MODEL_PATH
             models['topic'] = TopicModeler.load(topic_path)
+            
+            # Connect to NLPProcessor if available
+            if 'nlp_processor' in models and hasattr(models['topic'], 'nlp_processor'):
+                models['topic'].nlp_processor = models['nlp_processor']
+                
             logger.info(f"Topic model loaded from {topic_path}")
         except Exception as e:
             logger.warning(f"Failed to load topic model: {str(e)}")
@@ -108,6 +124,11 @@ def load_models() -> Dict[str, Any]:
         try:
             feature_path = FEATURE_EXTRACTOR_PATH
             models['feature_extractor'] = FeatureExtractor.load(feature_path)
+            
+            # Connect to NLPProcessor if available and not already present
+            if 'nlp_processor' in models and not hasattr(models['feature_extractor'], 'nlp_processor'):
+                models['feature_extractor'].nlp_processor = models['nlp_processor']
+                
             logger.info(f"Feature extractor loaded from {feature_path}")
         except Exception as e:
             # Try alternative paths with timestamp suffixes
@@ -121,6 +142,11 @@ def load_models() -> Dict[str, Any]:
                     # Sort by modification time to get the newest
                     newest_path = max(alternative_paths, key=os.path.getmtime)
                     models['feature_extractor'] = FeatureExtractor.load(newest_path)
+                    
+                    # Connect to NLPProcessor if available
+                    if 'nlp_processor' in models:
+                        models['feature_extractor'].nlp_processor = models['nlp_processor']
+                        
                     logger.info(f"Feature extractor loaded from alternative path: {newest_path}")
                 else:
                     logger.warning(f"No alternative feature extractor paths found")
@@ -159,34 +185,7 @@ def load_models() -> Dict[str, Any]:
 
 
 def get_available_models() -> Dict[str, List[Dict[str, Any]]]:
-    """Get list of all available models in the model zoo for the dashboard.
-    
-    Creates a catalog of available pre-trained models organized by type
-    (embedding, sentiment, topic, feature extraction). For each model,
-    it provides metadata such as name, description, version, and creation date.
-    
-    This function can be extended to dynamically scan model directories
-    and populate the catalog based on available model files. Currently,
-    it returns a static list of demonstration models.
-    
-    Args:
-        None
-        
-    Returns:
-        Dict[str, List[Dict[str, Any]]]: Dictionary of available models by type where:
-            - Keys are model types ('embedding', 'sentiment', 'topic', 'feature_extractor')
-            - Values are lists of model information dictionaries containing:
-                - name: Display name of the model
-                - description: Brief description of the model
-                - version: Version string
-                - created_at: Creation date string
-                
-    Example:
-        >>> available_models = get_available_models()
-        >>> sentiment_models = available_models['sentiment']
-        >>> for model in sentiment_models:
-        ...     print(f"{model['name']} (v{model['version']}): {model['description']}")
-    """
+    """Get list of all available models in the model zoo for the dashboard."""
     model_types = {
         'embedding': [],
         'sentiment': [],
@@ -231,26 +230,7 @@ def get_available_models() -> Dict[str, List[Dict[str, Any]]]:
     return model_types
 
 def format_topics(topic_model: TopicModeler) -> pd.DataFrame:
-    """Format topic model data into a DataFrame for visualization.
-    
-    This function takes a topic model and formats its topic-word distributions
-    into a structured DataFrame suitable for dashboard visualization. It includes
-    topic IDs, top words for each topic, and relevance scores.
-    
-    Args:
-        topic_model (TopicModeler): The trained topic model to format.
-        
-    Returns:
-        pd.DataFrame: Formatted DataFrame of topics with columns:
-            - topic_id: Numeric ID for each topic
-            - top_words: String of top words that best represent the topic
-            - word_weights: Dictionary mapping words to their weights in the topic
-            - coherence: Topic coherence score if available
-            
-    Example:
-        >>> topics_df = format_topics(topic_model)
-        >>> print(f"Found {len(topics_df)} topics")
-    """
+    """Format topic model data into a DataFrame for visualization."""
     if not hasattr(topic_model, 'num_topics') or not topic_model.num_topics:
         return pd.DataFrame()
     
@@ -265,14 +245,18 @@ def format_topics(topic_model: TopicModeler) -> pd.DataFrame:
         
         # Add topic words if available
         if hasattr(topic_model, 'get_topic_words'):
-            words = topic_model.get_topic_words(i, top_n=10)
-            if isinstance(words, list):
-                if words and isinstance(words[0], tuple):
-                    # (word, score) format
-                    word_str = ", ".join([w[0] for w in words[:5]])
-                else:
-                    word_str = ", ".join(words[:5])
-                topic_dict['top_words'] = word_str
+            try:
+                words = topic_model.get_topic_words(i, top_n=10)
+                if isinstance(words, list):
+                    if words and isinstance(words[0], tuple):
+                        # (word, score) format
+                        word_str = ", ".join([w[0] for w in words[:5]])
+                    else:
+                        word_str = ", ".join(words[:5])
+                    topic_dict['top_words'] = word_str
+            except Exception as e:
+                logger.warning(f"Could not get topic words for topic {i}: {str(e)}")
+                topic_dict['top_words'] = ""
         
         # Add topic weight/prevalence if available
         if hasattr(topic_model, 'topic_weights'):
@@ -284,59 +268,23 @@ def format_topics(topic_model: TopicModeler) -> pd.DataFrame:
 
 
 def classify_sentiment(text: str, sentiment_model: SentimentAnalyzer) -> Dict[str, float]:
-    """Analyze sentiment of financial text using the provided sentiment model.
+    """Analyze sentiment of financial text using the provided sentiment model."""
+    if not text or not isinstance(text, str):
+        return {"positive": 0, "negative": 0, "uncertainty": 0}
     
-    Processes the input text using the given sentiment analyzer to extract
-    emotional tone and financial sentiment indicators. The function is a wrapper
-    around the sentiment model's analyze method that provides consistent error
-    handling and interface for the dashboard.
-    
-    Args:
-        text (str): Financial text to analyze for sentiment.
-        sentiment_model (SentimentAnalyzer): Initialized sentiment analyzer model
-            that implements the analyze() method.
-        
-    Returns:
-        Dict[str, float]: Dictionary of sentiment scores where:
-            - Keys are sentiment dimensions (e.g., 'positive', 'negative', 'uncertainty')
-            - Values are floating-point scores, typically in range [-1.0, 1.0]
-            
-    Example:
-        >>> sentiment_model = SentimentAnalyzer.load(model_path)
-        >>> sentiment_scores = classify_sentiment("Revenue increased by 15%", sentiment_model)
-        >>> print(f"Positive score: {sentiment_scores.get('positive', 0)}")
-    """
-    return sentiment_model.analyze(text)
+    try:
+        return sentiment_model.analyze(text)
+    except Exception as e:
+        logger.error(f"Error in sentiment analysis: {str(e)}")
+        return {"positive": 0, "negative": 0, "uncertainty": 0}
 
 
 def format_sentiment_result(result: Dict[str, float]) -> pd.DataFrame:
-    """Format sentiment analysis results for dashboard visualization.
-    
-    Converts dictionary-based sentiment scores into a structured DataFrame
-    that can be easily used for visualization in the dashboard. The function
-    sorts sentiment dimensions by the absolute value of their scores to 
-    highlight the strongest sentiment indicators first.
-    
-    Args:
-        result (Dict[str, float]): Sentiment analysis results dictionary where
-            keys are sentiment dimensions and values are corresponding scores.
+    """Format sentiment analysis results for dashboard visualization."""
+    # Handle empty result
+    if not result:
+        return pd.DataFrame(columns=['Dimension', 'Score'])
         
-    Returns:
-        pd.DataFrame: Formatted DataFrame of sentiment results with columns:
-            - Dimension: The sentiment dimension name (e.g., 'positive', 'negative')
-            - Score: The sentiment score value
-            The DataFrame is sorted by the absolute value of the scores
-            in descending order.
-            
-    Example:
-        >>> sentiment_scores = {'positive': 0.65, 'negative': -0.12, 'uncertainty': 0.24}
-        >>> result_df = format_sentiment_result(sentiment_scores)
-        >>> print(result_df.head())
-           Dimension  Score
-        0  positive    0.65
-        1  uncertainty 0.24
-        2  negative   -0.12
-    """
     # Convert to DataFrame for easier visualization
     sentiment_df = pd.DataFrame({
         'Dimension': list(result.keys()),
@@ -352,23 +300,31 @@ def format_sentiment_result(result: Dict[str, float]) -> pd.DataFrame:
 
 
 def extract_topic_visualization(topic_model: TopicModeler) -> str:
-    """Extract or generate interactive visualization HTML from topic model.
-    
-    Attempts to get HTML-based interactive visualizations from the topic model
-    if it supports this capability. If not available, generates a Plotly-based
-    visualization showing topic relationships.
-    
-    Args:
-        topic_model (TopicModeler): The initialized topic model object
+    """Extract or generate interactive visualization HTML from topic model."""
+    # First check if we can use a better pyLDAvis visualization
+    try:
+        import pyLDAvis
+        import pyLDAvis.sklearn
         
-    Returns:
-        str: HTML string containing the interactive visualization
-    """
+        if hasattr(topic_model, 'model') and hasattr(topic_model, 'dtm'):
+            if hasattr(topic_model, 'nlp_processor') and topic_model.nlp_processor is not None:
+                vectorizer = topic_model.nlp_processor.count_vectorizer
+                if vectorizer is not None:
+                    prepared_data = pyLDAvis.sklearn.prepare(
+                        topic_model.model, topic_model.dtm, vectorizer
+                    )
+                    return pyLDAvis.prepared_data_to_html(prepared_data)
+    except Exception as e:
+        logger.warning(f"Could not create pyLDAvis visualization: {str(e)}")
+    
     # First try to use the model's built-in visualization if available
     if hasattr(topic_model, 'get_visualization_html'):
-        html = topic_model.get_visualization_html()
-        if html:
-            return html
+        try:
+            html = topic_model.get_visualization_html()
+            if html:
+                return html
+        except Exception as e:
+            logger.warning(f"Built-in visualization failed: {str(e)}")
     
     # If no built-in visualization, create one with Plotly
     try:
@@ -380,11 +336,14 @@ def extract_topic_visualization(topic_model: TopicModeler) -> str:
         
         # Function to get topic words
         def get_topic_words(topic_id, num_words=10):
-            if hasattr(topic_model, 'get_topic_words'):
-                return topic_model.get_topic_words(topic_id, num_words)
-            elif hasattr(topic_model, 'topic_words') and topic_model.topic_words:
-                if topic_id in topic_model.topic_words:
-                    return topic_model.topic_words[topic_id][:num_words]
+            try:
+                if hasattr(topic_model, 'get_topic_words'):
+                    return topic_model.get_topic_words(topic_id, num_words)
+                elif hasattr(topic_model, 'topic_words') and topic_model.topic_words:
+                    if topic_id in topic_model.topic_words:
+                        return topic_model.topic_words[topic_id][:num_words]
+            except Exception:
+                pass
             return []
         
         # Generate topic positions in 2D space
@@ -401,7 +360,10 @@ def extract_topic_visualization(topic_model: TopicModeler) -> str:
         for i in range(num_topics):
             words = get_topic_words(i, 10)
             if isinstance(words, list):
-                topic_words_text = ", ".join(words[:8])
+                if words and isinstance(words[0], tuple):
+                    topic_words_text = ", ".join([w[0] for w in words[:8]])
+                else:
+                    topic_words_text = ", ".join([str(w) for w in words[:8]])
             else:
                 topic_words_text = str(words)
             hover_texts.append(f"Topic {i}<br>{topic_words_text}")
@@ -442,95 +404,41 @@ def extract_topic_visualization(topic_model: TopicModeler) -> str:
         logger.error(f"Error creating topic visualization: {str(e)}")
         return ""
 
-def get_visualization_html(self) -> str:
-    """Generate an interactive HTML visualization of the topic model.
-    
-    Returns:
-        str: HTML content for interactive visualization, or empty string if unavailable
-    """
-    try:
-        if self.method == 'lda':
-            # For LDA models, generate pyLDAvis visualization
-            import pyLDAvis
-            import pyLDAvis.sklearn
-            
-            if not hasattr(self, '_prepared_vis'):
-                # Only prepare visualization once (it's computationally expensive)
-                if hasattr(self, 'dtm') and hasattr(self, 'model'):
-                    self._prepared_vis = pyLDAvis.sklearn.prepare(
-                        self.model, self.dtm, self.vectorizer
-                    )
-                else:
-                    return ""
-                    
-            # Convert to HTML
-            return pyLDAvis.prepared_data_to_html(self._prepared_vis)
-            
-        # Add other model type visualizations here if needed
-        
-    except Exception as e:
-        logger.error(f"Error generating visualization: {str(e)}")
-        
-    return ""
 
 def get_feature_importance_plot(feature_extractor: FeatureExtractor) -> Optional[plt.Figure]:
-    """Generate a feature importance visualization from the feature extractor.
+    """Generate a feature importance visualization from the feature extractor."""
+    # Try to get feature importances from feature_extractor using different approaches
+    importances = None
     
-    Creates a horizontal bar chart showing the most influential features in the
-    feature extraction model. The chart displays the top 15 features ranked by
-    their importance scores, which helps in interpreting which textual elements
-    are most predictive in the financial analysis models.
-    
-    The function handles feature importance data in different formats (dictionary
-    or list of tuples) and generates a standardized visualization.
-    
-    Args:
-        feature_extractor (FeatureExtractor): The initialized feature extractor
-            object that implements the get_feature_importance() method.
-        
-    Returns:
-        Optional[plt.Figure]: Matplotlib figure object containing the feature
-            importance bar chart, or None if feature importance information
-            is not available or an error occurs.
-            
-    Example:
-        >>> fig = get_feature_importance_plot(feature_extractor)
-        >>> if fig:
-        ...     st.pyplot(fig)
-        ... else:
-        ...     st.warning("Feature importance data not available")
-            
-    Notes:
-        The function attempts to extract the top 15 most important features.
-        It's designed to be resilient to different feature importance formats
-        that might be returned by different feature extractor implementations.
-    """
-    if not hasattr(feature_extractor, 'get_feature_importance'):
-        return None
-    
-    # Get feature importance data
     try:
-        feature_importance = feature_extractor.get_feature_importance()
+        # Try first with get_top_features if available
+        if hasattr(feature_extractor, 'get_top_features'):
+            top_features = feature_extractor.get_top_features(15)
+            if isinstance(top_features, pd.DataFrame) and 'feature' in top_features.columns and 'importance' in top_features.columns:
+                features = top_features['feature'].tolist()
+                importance = top_features['importance'].tolist()
+                importances = (features, importance)
         
-        if not feature_importance:
+        # If not available, try with feature_importances attribute
+        if importances is None and hasattr(feature_extractor, 'feature_importances'):
+            if isinstance(feature_extractor.feature_importances, pd.DataFrame):
+                if 'feature' in feature_extractor.feature_importances.columns and 'importance' in feature_extractor.feature_importances.columns:
+                    df = feature_extractor.feature_importances.copy()
+                    df['abs_importance'] = df['importance'].abs()
+                    df = df.sort_values('abs_importance', ascending=False).head(15)
+                    features = df['feature'].tolist()
+                    importance = df['importance'].tolist()
+                    importances = (features, importance)
+                    
+        # If still no importances, return None
+        if importances is None:
             return None
-        
+            
         # Create figure
         fig, ax = plt.subplots(figsize=(10, 6))
         
-        # Sort by importance
-        if isinstance(feature_importance, dict):
-            features = list(feature_importance.keys())
-            importance = list(feature_importance.values())
-        else:
-            # Assume it's a list of (feature, importance) tuples
-            features = [f[0] for f in feature_importance]
-            importance = [f[1] for f in feature_importance]
-            
-        # Sort features by importance
-        sorted_idx = np.argsort(importance)
-        features = [features[i] for i in sorted_idx[-15:]]  # Top 15 features
-        importance = [importance[i] for i in sorted_idx[-15:]]
+        # Unpack feature names and importance values
+        features, importance = importances
         
         # Plot horizontal bar chart
         ax.barh(features, importance)
@@ -546,40 +454,8 @@ def get_feature_importance_plot(feature_extractor: FeatureExtractor) -> Optional
         return None
 
 
-def get_wordcloud_for_topic(topic_model: TopicModeler, topic_id: int) -> Optional[bytes]:
-    """Generate a word cloud visualization for a specific topic in the topic model.
-    
-    Creates a visually appealing word cloud where word size corresponds to its
-    importance within the specified topic. This provides an intuitive visualization
-    of the most relevant terms in each topic, making the abstract topic model
-    more interpretable for dashboard users.
-    
-    The function handles different formats of topic word representations and
-    generates a consistent visualization using the WordCloud package.
-    
-    Args:
-        topic_model (TopicModeler): The initialized topic model object that
-            implements the get_topic_words() method.
-        topic_id (int): Numeric identifier of the topic to visualize.
-        
-    Returns:
-        Optional[bytes]: Base64-encoded PNG image of the word cloud, ready to be
-            displayed in the dashboard using st.image() or HTML components.
-            Returns None if the topic model doesn't support word retrieval,
-            the topic ID is invalid, or an error occurs.
-            
-    Example:
-        >>> wordcloud_img = get_wordcloud_for_topic(topic_model, 5)
-        >>> if wordcloud_img:
-        ...     st.image(wordcloud_img)
-        ... else:
-        ...     st.warning("Could not generate word cloud for this topic")
-            
-    Notes:
-        The function uses the MAX_WORD_CLOUD_WORDS configuration parameter to
-        limit the number of words displayed in the cloud. The default color
-        scheme used is 'viridis' which provides good contrast and readability.
-    """
+def get_wordcloud_for_topic(topic_model: TopicModeler, topic_id: int) -> Optional[str]:
+    """Generate a word cloud visualization for a specific topic in the topic model."""
     if not hasattr(topic_model, 'get_topic_words'):
         return None
     
@@ -600,7 +476,8 @@ def get_wordcloud_for_topic(topic_model: TopicModeler, topic_id: int) -> Optiona
             # Just words, use decreasing weights
             for i, word in enumerate(words):
                 word_dict[word] = (len(words) - i) / len(words)
-          # Generate word cloud
+                
+        # Generate word cloud
         wordcloud = WordCloud(
             width=800,
             height=400,
@@ -627,37 +504,7 @@ def get_wordcloud_for_topic(topic_model: TopicModeler, topic_id: int) -> Optiona
 
 
 def create_prediction_simulator(models: Dict[str, Any], sample_text: str) -> Dict[str, Any]:
-    """Create a configuration for the earnings report prediction simulator component.
-    
-    Sets up an interactive simulator component for the dashboard that allows users
-    to input financial text and get predictions from various NLP models. The simulator
-    adapts its functionality based on which models are available, enabling sentiment
-    analysis, topic modeling, and feature extraction on user-provided text.
-    
-    This function prepares the simulator configuration including model availability,
-    initial sample text, and prediction functions that can be invoked by the dashboard.
-    
-    Args:
-        models (Dict[str, Any]): Dictionary of loaded NLP models where keys are
-            model types ('sentiment', 'topic', 'feature_extractor') and values
-            are the corresponding model objects.
-        sample_text (str): Sample earnings report text to use for initial display
-            in the simulator input box.
-        
-    Returns:
-        Dict[str, Any]: Dictionary with simulator configuration containing:
-            - has_models: Boolean indicating if any models are available
-            - initial_text: Sample text for initial display
-            - available_models: Dictionary of model availability by type
-            - predict_sentiment: Function for sentiment prediction (or dummy if unavailable)
-            - predict_topics: Function for topic prediction (or dummy if unavailable)
-            - extract_features: Function for feature extraction (or dummy if unavailable)
-            
-    Example:
-        >>> simulator = create_prediction_simulator(models, "Q2 revenue increased by 15%")
-        >>> if simulator['has_models']:
-        ...     results = simulator['predict_sentiment'](user_text)
-    """
+    """Create a configuration for the earnings report prediction simulator component."""
     simulator = {
         'has_models': len(models) > 0,
         'initial_text': sample_text,
@@ -668,75 +515,99 @@ def create_prediction_simulator(models: Dict[str, Any], sample_text: str) -> Dic
         }
     }
     
-    # Add prediction functions
-    if 'sentiment' in models:
-        simulator['predict_sentiment'] = lambda text: models['sentiment'].analyze(text)
-    else:
-        simulator['predict_sentiment'] = lambda text: None
+    # Add prediction functions with improved error handling
     
-    if 'topic' in models:
-        simulator['predict_topics'] = lambda text: models['topic'].extract_topics([text])
-    else:
-        simulator['predict_topics'] = lambda text: None
-        
-    if 'feature_extractor' in models:
-        simulator['extract_features'] = lambda text: models['feature_extractor'].extract_financial_metrics(
-            pd.DataFrame({'text': [text]})
-        ) if text else {}
-    else:
-        simulator['extract_features'] = lambda text: None
+    # Sentiment prediction function
+    def predict_sentiment(text):
+        if not text or 'sentiment' not in models:
+            return None
+        try:
+            return models['sentiment'].analyze(text)
+        except Exception as e:
+            logger.error(f"Error in sentiment prediction: {str(e)}")
+            return None
+    
+    # Topic prediction function
+    def predict_topics(text):
+        if not text or 'topic' not in models:
+            return None
+        try:
+            # Make sure we have a string input - handle both string and DataFrame inputs
+            if isinstance(text, pd.DataFrame):
+                if 'text' in text.columns and len(text) > 0:
+                    text = text['text'].iloc[0]
+                else:
+                    text = str(text.iloc[0])
+            
+            # Use extract_topics with proper single-text handling
+            return models['topic'].extract_topics([text])
+        except Exception as e:
+            logger.error(f"Error in topic prediction: {str(e)}")
+            return None
+    
+    # Feature extraction function
+    def extract_features(text):
+        if not text or 'feature_extractor' not in models:
+            return {}
+        try:
+            # Make sure we're using the proper input format
+            if not isinstance(text, pd.DataFrame):
+                text_df = pd.DataFrame({'text': [text]})
+            else:
+                text_df = text
+                
+            # Use extract_financial_metrics with the DataFrame input
+            return models['feature_extractor'].extract_financial_metrics(text_df)
+        except Exception as e:
+            logger.error(f"Error extracting features: {str(e)}")
+            return {}
+    
+    # Set the prediction functions
+    simulator['predict_sentiment'] = predict_sentiment
+    simulator['predict_topics'] = predict_topics
+    simulator['extract_features'] = extract_features
     
     return simulator
 
 
 def create_topic_explorer(topic_model: Optional[TopicModeler]) -> Dict[str, Any]:
-    """Create a configuration for the interactive topic explorer component.
-    
-    Sets up an interactive topic exploration interface for the dashboard that allows
-    users to browse, visualize, and understand topics extracted from earnings reports.
-    The explorer provides topic words, distributions, and visualizations to help
-    interpret the latent topics discovered in the financial text corpus.
-    
-    This function prepares the explorer configuration including topic metadata,
-    visualization capabilities, word retrieval functions, and word cloud generation.
-    
-    Args:
-        topic_model (Optional[TopicModeler]): The initialized topic model object
-            that provides topic extraction functionality, or None if no model
-            is available.
-        
-    Returns:
-        Dict[str, Any]: Dictionary with explorer configuration containing:
-            - has_model: Boolean indicating if a topic model is available
-            - num_topics: Number of topics in the model (if available)
-            - topics_df: DataFrame of topic information
-            - visualization_html: Interactive visualization HTML (if available)
-            - get_topic_words: Function for retrieving top words for a topic
-            - get_wordcloud: Function for generating topic word clouds
-            
-    Example:
-        >>> explorer = create_topic_explorer(topic_model)
-        >>> if explorer['has_model']:
-        ...     topic_words = explorer['get_topic_words'](topic_id=3, n=20)
-        ...     wordcloud = explorer['get_wordcloud'](topic_id=3)
-            
-    Notes:
-        If the topic model is None or doesn't provide required functionality,
-        the explorer will have limited features. The dashboard should check
-        the 'has_model' flag before attempting to use topic exploration features.
-    """
+    """Create a configuration for the interactive topic explorer component."""
     if topic_model is None:
         return {'has_model': False}
     
+    # Make sure we can safely access num_topics
+    num_topics = 0
+    if hasattr(topic_model, 'num_topics'):
+        num_topics = topic_model.num_topics
+    elif hasattr(topic_model, 'model') and hasattr(topic_model.model, 'n_components'):
+        num_topics = topic_model.model.n_components
+    
+    # Safe implementation of get_topic_words
+    def get_topic_words(topic_id, n=10):
+        try:
+            if hasattr(topic_model, 'get_topic_words'):
+                return topic_model.get_topic_words(topic_id, n)
+            # Fall back to other approaches if needed
+            return []
+        except Exception as e:
+            logger.warning(f"Error getting topic words: {str(e)}")
+            return []
+    
+    # Safe implementation of get_wordcloud
+    def get_wordcloud(topic_id):
+        try:
+            return get_wordcloud_for_topic(topic_model, topic_id)
+        except Exception as e:
+            logger.warning(f"Error generating wordcloud: {str(e)}")
+            return None
+    
     explorer = {
         'has_model': True,
-        'num_topics': topic_model.num_topics if hasattr(topic_model, 'num_topics') else 0,
+        'num_topics': num_topics,
         'topics_df': format_topics(topic_model),
         'visualization_html': extract_topic_visualization(topic_model),
-        'get_topic_words': lambda topic_id, n=10: topic_model.get_topic_words(topic_id, n) if hasattr(topic_model, 'get_topic_words') else [],
-        'get_wordcloud': lambda topic_id: get_wordcloud_for_topic(topic_model, topic_id)
+        'get_topic_words': get_topic_words,
+        'get_wordcloud': get_wordcloud
     }
     
     return explorer
-
-

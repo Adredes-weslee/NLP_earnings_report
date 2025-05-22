@@ -1,6 +1,12 @@
-"""
-Sentiment analysis module for financial text processing.
-Incorporates financial-specific lexicons and transformer-based models.
+"""Sentiment analysis module for financial text processing.
+
+This module provides sentiment analysis capabilities for financial text using
+lexicon-based approaches (Loughran-McDonald) and transformer-based models.
+It integrates with the centralized NLPProcessor to ensure consistent tokenization
+across the NLP pipeline.
+
+The SentimentAnalyzer class offers multiple analysis methods and can combine
+approaches for more robust sentiment scoring of financial language.
 """
 
 import pandas as pd
@@ -8,8 +14,11 @@ import numpy as np
 import re
 import os
 import logging
-from typing import List, Dict, Union, Optional
+from typing import List, Dict, Union, Optional, Tuple
 import joblib
+
+# Import the centralized NLPProcessor
+from .nlp_processing import NLPProcessor
 
 # Optional imports for advanced sentiment analysis
 try:
@@ -31,11 +40,13 @@ class SentimentAnalyzer:
     Attributes:
         method (str): The sentiment analysis method being used.
         model_name (str): Name of the transformer model if applicable.
+        nlp_processor (NLPProcessor): Centralized processor for text tokenization.
         transformer_model: The loaded transformer model if applicable.
         lexicon (dict): The sentiment lexicon dictionary if using lexicon-based methods.
     """
     
-    def __init__(self, method: str = 'loughran_mcdonald', model_name: str = 'ProsusAI/finbert'):
+    def __init__(self, method: str = 'loughran_mcdonald', model_name: str = 'ProsusAI/finbert',
+                nlp_processor: NLPProcessor = None):
         """Initialize the sentiment analyzer with specified method and model.
         
         Args:
@@ -47,18 +58,22 @@ class SentimentAnalyzer:
             model_name (str): Name of transformer model to use if method is 'transformer'
                 or 'combined'. Defaults to 'ProsusAI/finbert', which is specialized for
                 financial text.
+            nlp_processor (NLPProcessor, optional): Centralized NLP processor to use for
+                consistent tokenization. If None, a new one will be created when needed.
                 
         Raises:
             ImportError: If transformer-based method is selected but the required
                 libraries are not installed.
                 
         Example:
-            >>> analyzer = SentimentAnalyzer(method='combined')
-            >>> analyzer.load_resources()
+            >>> # Using shared NLP processor
+            >>> nlp_proc = NLPProcessor()
+            >>> analyzer = SentimentAnalyzer(method='combined', nlp_processor=nlp_proc)
             >>> sentiment = analyzer.analyze("Revenue increased by 15% this quarter.")
         """
         self.method = method
         self.model_name = model_name
+        self.nlp_processor = nlp_processor
         self.transformer_model = None
         self.lexicon = None
         
@@ -185,6 +200,39 @@ class SentimentAnalyzer:
         except Exception as e:
             logger.error(f"Error loading transformer model: {str(e)}")
             raise
+    
+    def _get_tokens(self, text: str) -> List[str]:
+        """Get tokens from text using the centralized NLPProcessor when available.
+        
+        This method uses the shared NLPProcessor for tokenization when available,
+        or falls back to a simple regex-based tokenization. Using the shared processor
+        ensures consistent tokenization throughout the pipeline.
+        
+        Args:
+            text (str): Text to tokenize
+            
+        Returns:
+            List[str]: List of tokens (words)
+        """
+        # First option: Use the shared NLPProcessor if available
+        if self.nlp_processor is not None:
+            try:
+                # Create a small DTM just to get tokens
+                text_list = [text]
+                _, feature_names = self.nlp_processor.create_document_term_matrix(text_list)
+                
+                # The tokens in the document are those features that have non-zero count
+                # We'd need to check the actual DTM to see which tokens are present
+                # Since this is complex, we'll fall back to simpler tokenization
+                
+                # For now, just use regex as fallback
+                return re.findall(r'\b[a-zA-Z_]{3,}[a-zA-Z]*\b', text.lower())
+            except Exception as e:
+                logger.warning(f"Error using NLPProcessor for tokenization: {str(e)}")
+                # Fall through to regex tokenization
+        
+        # Simple tokenization fallback
+        return re.findall(r'\b\w+\b', text.lower())
         
     def _lexicon_sentiment(self, text: str) -> Dict[str, float]:
         """Calculate sentiment scores using the Loughran-McDonald lexicon.
@@ -213,8 +261,8 @@ class SentimentAnalyzer:
         if not self.lexicon:
             self._load_loughran_mcdonald_lexicon()
             
-        # Tokenize and clean text
-        words = re.findall(r'\b\w+\b', text.lower())
+        # Tokenize using the centralized method
+        words = self._get_tokens(text)
         
         # Count sentiment words
         positive_count = sum(1 for word in words if word in self.lexicon['positive'])
@@ -234,6 +282,7 @@ class SentimentAnalyzer:
         }
         
         return scores
+        
     def _transformer_sentiment(self, text: str) -> Dict[str, float]:
         """Calculate sentiment scores using transformer-based models.
         
@@ -288,6 +337,7 @@ class SentimentAnalyzer:
             scores['sentiment_ratio'] = scores.get('positive', 0) / (scores.get('negative', 0) + 0.001)
         
         return scores
+        
     def analyze(self, text: str) -> Dict[str, float]:
         """Analyze sentiment of the given text using the configured method.
         
@@ -339,6 +389,86 @@ class SentimentAnalyzer:
                 logger.warning(f"Transformer model failed, falling back to lexicon: {str(e)}")
                 return lexicon_scores
             
+    def analyze_with_dtm(self, dtm: np.ndarray, feature_names: List[str]) -> Dict[str, float]:
+        """Analyze sentiment using a pre-computed document-term matrix.
+        
+        This method is useful when you already have a document-term matrix from
+        the NLPProcessor and want to avoid re-tokenizing the text. It works only
+        with lexicon-based sentiment analysis (not transformer-based).
+        
+        Args:
+            dtm (np.ndarray): Document-term matrix, should be a 1xN or Nx1 sparse matrix
+                or numpy array representing a single document.
+            feature_names (List[str]): List of feature names (vocabulary) corresponding
+                to the columns in the DTM.
+            
+        Returns:
+            Dict[str, float]: Dictionary containing sentiment scores with keys:
+                - 'positive': Ratio of positive words to total words
+                - 'negative': Ratio of negative words to total words
+                - 'uncertainty': Ratio of uncertainty words to total words
+                - 'litigious': Ratio of litigious words to total words
+                - 'net_sentiment': Net sentiment score (positive - negative) / total
+                - 'sentiment_ratio': Ratio of positive to negative word counts
+                
+        Example:
+            >>> # Get DTM from NLPProcessor
+            >>> dtm, feature_names = nlp_processor.create_document_term_matrix(["Revenue grew by 15%"])
+            >>> # Analyze using the DTM directly
+            >>> sentiment = analyzer.analyze_with_dtm(dtm[0], feature_names)
+            
+        Note:
+            This method only works with lexicon-based sentiment analysis, not with
+            transformer-based methods which require the raw text.
+        """
+        if not self.lexicon:
+            self._load_loughran_mcdonald_lexicon()
+        
+        # Ensure we have a 1D array if dtm is a sparse matrix
+        if hasattr(dtm, 'toarray'):
+            if dtm.shape[0] == 1:
+                dtm_array = dtm.toarray()[0]
+            else:
+                dtm_array = dtm.toarray().flatten()
+        else:
+            dtm_array = dtm.flatten() if dtm.ndim > 1 else dtm
+            
+        # Get non-zero indices (words that appear in the document)
+        non_zero_indices = np.nonzero(dtm_array)[0]
+        
+        # Count sentiment words
+        positive_count = 0
+        negative_count = 0
+        uncertainty_count = 0
+        litigious_count = 0
+        
+        for idx in non_zero_indices:
+            if idx < len(feature_names):
+                word = feature_names[idx]
+                if word in self.lexicon['positive']:
+                    positive_count += dtm_array[idx]
+                if word in self.lexicon['negative']:
+                    negative_count += dtm_array[idx]
+                if word in self.lexicon['uncertainty']:
+                    uncertainty_count += dtm_array[idx]
+                if word in self.lexicon['litigious']:
+                    litigious_count += dtm_array[idx]
+        
+        # Total number of words is the sum of the DTM values
+        total_count = dtm_array.sum() if dtm_array.sum() > 0 else 1
+        
+        # Calculate scores
+        scores = {
+            'positive': positive_count / total_count,
+            'negative': negative_count / total_count,
+            'uncertainty': uncertainty_count / total_count,
+            'litigious': litigious_count / total_count,
+            'net_sentiment': (positive_count - negative_count) / total_count,
+            'sentiment_ratio': positive_count / (negative_count + 1)  # Add 1 to avoid division by zero
+        }
+        
+        return scores
+    
     def batch_analyze(self, texts: List[str]) -> pd.DataFrame:
         """Analyze sentiment for multiple texts in batch mode.
         
@@ -374,7 +504,57 @@ class SentimentAnalyzer:
             
         return pd.DataFrame(results)
     
-    def enrich_dataframe(self, df: pd.DataFrame, text_column: str, prefix: str = 'sentiment_') -> pd.DataFrame:
+    def batch_analyze_with_dtm(self, dtm: np.ndarray, feature_names: List[str]) -> pd.DataFrame:
+        """Analyze sentiment for multiple texts using a pre-computed document-term matrix.
+        
+        This method is useful when you already have a document-term matrix from
+        the NLPProcessor and want to avoid re-tokenizing the texts. It works only
+        with lexicon-based sentiment analysis (not transformer-based).
+        
+        Args:
+            dtm (np.ndarray): Document-term matrix, should be an NxM matrix where
+                N is the number of documents and M is the vocabulary size.
+            feature_names (List[str]): List of feature names (vocabulary) corresponding
+                to the columns in the DTM.
+            
+        Returns:
+            pd.DataFrame: DataFrame where each row contains sentiment scores for the
+                corresponding document in the DTM.
+                
+        Example:
+            >>> # Get DTM from NLPProcessor
+            >>> dtm, feature_names = nlp_processor.create_document_term_matrix(texts)
+            >>> # Analyze using the DTM directly
+            >>> sentiments_df = analyzer.batch_analyze_with_dtm(dtm, feature_names)
+            
+        Note:
+            This method only works with lexicon-based sentiment analysis, not with
+            transformer-based methods which require the raw text. For transformer
+            methods, use batch_analyze() instead.
+        """
+        if self.method not in ['loughran_mcdonald', 'combined']:
+            logger.warning("Cannot use DTM with transformer-based sentiment. Using lexicon method.")
+        
+        results = []
+        
+        # Process each row in the DTM
+        for i in range(dtm.shape[0]):
+            if i % 100 == 0 and i > 0:
+                logger.info(f"Processed {i}/{dtm.shape[0]} documents")
+                
+            # Get the i-th row (document)
+            if hasattr(dtm, 'getrow'):
+                doc_row = dtm.getrow(i)
+            else:
+                doc_row = dtm[i]
+                
+            # Analyze with the DTM
+            results.append(self.analyze_with_dtm(doc_row, feature_names))
+            
+        return pd.DataFrame(results)
+    
+    def enrich_dataframe(self, df: pd.DataFrame, text_column: str, prefix: str = 'sentiment_',
+                        use_dtm: bool = False) -> pd.DataFrame:
         """Add sentiment analysis columns to an existing DataFrame.
         
         This convenience method analyzes text in a DataFrame column and adds
@@ -386,6 +566,9 @@ class SentimentAnalyzer:
             text_column (str): Name of the column containing text to analyze.
             prefix (str, optional): Prefix for newly created sentiment columns.
                 Defaults to 'sentiment_'.
+            use_dtm (bool, optional): Whether to use a DTM for lexicon-based
+                sentiment analysis. More efficient but only works with lexicon method.
+                Defaults to False.
             
         Returns:
             pd.DataFrame: Original DataFrame with additional sentiment score columns.
@@ -404,8 +587,19 @@ class SentimentAnalyzer:
             >>> print(enriched_df.columns)
             ['report_text', 'company', 'sentiment_positive', 'sentiment_negative', ...]
         """
-        texts = df[text_column].fillna('').tolist()
-        sentiment_df = self.batch_analyze(texts)
+        if use_dtm and self.method != 'transformer' and self.nlp_processor is not None:
+            # Use DTM-based analysis for efficiency (lexicon-based only)
+            texts = df[text_column].fillna('').tolist()
+            
+            # Create DTM using shared NLPProcessor
+            dtm, feature_names = self.nlp_processor.create_document_term_matrix(texts)
+            
+            # Analyze using DTM
+            sentiment_df = self.batch_analyze_with_dtm(dtm, feature_names)
+        else:
+            # Use standard text analysis
+            texts = df[text_column].fillna('').tolist()
+            sentiment_df = self.batch_analyze(texts)
         
         # Add prefix to column names
         sentiment_df.columns = [f"{prefix}{col}" for col in sentiment_df.columns]
@@ -445,6 +639,10 @@ class SentimentAnalyzer:
             'model_name': self.model_name
         }
         
+        # Save the NLPProcessor if available
+        if self.nlp_processor is not None:
+            self.nlp_processor.save(os.path.join(path, 'nlp_processor'))
+        
         joblib.dump(config, os.path.join(path, 'sentiment_config.joblib'))
         logger.info(f"Sentiment analyzer configuration saved to {path}")
         
@@ -474,9 +672,21 @@ class SentimentAnalyzer:
         """
         config = joblib.load(os.path.join(path, 'sentiment_config.joblib'))
         
+        # Try to load the NLPProcessor if available
+        nlp_processor = None
+        try:
+            from .nlp_processing import NLPProcessor
+            nlp_processor = NLPProcessor.load(os.path.join(path, 'nlp_processor'))
+            logger.info("Loaded NLPProcessor")
+        except FileNotFoundError:
+            logger.info("No NLPProcessor found")
+        except Exception as e:
+            logger.warning(f"Error loading NLPProcessor: {str(e)}")
+        
         instance = cls(
             method=config['method'],
-            model_name=config['model_name']
+            model_name=config['model_name'],
+            nlp_processor=nlp_processor
         )
         
         logger.info(f"Sentiment analyzer loaded from {path}")

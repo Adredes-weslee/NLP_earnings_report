@@ -22,12 +22,14 @@ import re
 import nltk
 import os
 import sys
+import pandas as pd
 from nltk.corpus import stopwords
-from nltk.tokenize import sent_tokenize
+from nltk.tokenize import sent_tokenize, word_tokenize
 import logging
 
 # Import configuration values
-from ..config import MIN_TOKEN_LENGTH, MIN_SENTENCE_TOKENS, MAX_FINANCIAL_NUM_RATIO
+from ..config import (MIN_TOKEN_LENGTH, MIN_SENTENCE_TOKENS, MAX_FINANCIAL_NUM_RATIO,
+                    RAW_DATA_PATH)
 
 # Set up logging
 logger = logging.getLogger('text_processor')
@@ -46,11 +48,13 @@ class TextProcessor:
     - Financial number handling and replacement
     - Sentence-level filtering and quality assessment 
     - Domain-specific text cleaning (e.g., removing disclaimers)
+    - Text statistics calculation
     
     Attributes:
         stops (list): List of stopwords used for text processing
         _digit_pattern (re.Pattern): Regular expression for identifying numbers
         _num_token (str): Token used to replace numbers when enabled
+        financial_stopwords (set): Domain-specific stopwords for financial text
     """
     
     def __init__(self):
@@ -245,6 +249,55 @@ class TextProcessor:
         
         return text
     
+    def clean_sentences(self, txt):
+        """Clean and filter sentences from the earnings announcement text.
+        
+        This method performs several preprocessing steps specialized for financial text:
+          - Replaces financial numbers with the token "financial_number"
+          - Tokenizes the text into sentences, then words
+          - Keeps only tokens that are either 'financial_number' or words with all letters
+            (alphabetic) of at least MIN_TOKEN_LENGTH characters
+          - Discards sentences with fewer than MIN_SENTENCE_TOKENS tokens or in which 
+            more than MAX_FINANCIAL_NUM_RATIO of tokens are financial numbers
+          - Returns the cleaned sentences reassembled as one string
+        
+        Args:
+            txt (str): Raw text from an earnings announcement.
+            
+        Returns:
+            str: Cleaned and filtered text suitable for NLP analysis.
+            
+        Example:
+            >>> processor = TextProcessor()
+            >>> raw_text = "Revenue increased to $1.2 billion. Profit margin was 12.5%."
+            >>> clean_text = processor.clean_sentences(raw_text)
+            >>> print(clean_text)
+            'revenue increased financial_number profit margin financial_number'
+        """
+        if not isinstance(txt, str):
+            return ""
+            
+        clean_txt = re.sub(r'\$?\d+(?:,\d{3})*(?:\.\d+)?', " financial_number ", txt)
+        sentences = sent_tokenize(clean_txt)
+        good_sents = []
+        
+        for sent in sentences:
+            tokens = word_tokenize(sent)
+            good_tokens = []
+            
+            for token in tokens:
+                if token == "financial_number":
+                    good_tokens.append(token)
+                elif token.isalpha() and len(token) >= MIN_TOKEN_LENGTH:
+                    good_tokens.append(token.lower())
+                    
+            if len(good_tokens) >= MIN_SENTENCE_TOKENS:
+                num_fin = sum(1 for token in good_tokens if token == "financial_number")
+                if (num_fin / len(good_tokens)) <= MAX_FINANCIAL_NUM_RATIO:
+                    good_sents.append(" ".join(good_tokens))
+                    
+        return " ".join(good_sents)
+    
     def tokenize_text(self, text, remove_stopwords=True):
         """Tokenize text into words, optionally removing stopwords.
         
@@ -358,3 +411,109 @@ class TextProcessor:
             return self.tokenize_text(text, remove_stopwords=remove_stopwords)
             
         return text
+    
+    def process_dataframe(self, df, text_column='ea_text', output_column='clean_sent'):
+        """Process text in a DataFrame column using the clean_sentences method.
+        
+        Applies the clean_sentences function to the specified text column
+        of the dataframe, creating a new column with the processed text.
+        
+        Args:
+            df (pandas.DataFrame): DataFrame containing text data to process.
+            text_column (str, optional): Name of the column containing raw text.
+                Defaults to 'ea_text'.
+            output_column (str, optional): Name for the new column with cleaned text.
+                Defaults to 'clean_sent'.
+            
+        Returns:
+            pandas.DataFrame: DataFrame with added column containing cleaned text.
+            
+        Example:
+            >>> processor = TextProcessor()
+            >>> df = pd.DataFrame({'ea_text': ['Revenue was $1.2M', 'Growth of 5.7%']})
+            >>> cleaned_df = processor.process_dataframe(df)
+            >>> print(cleaned_df['clean_sent'].iloc[0])
+            'revenue financial_number'
+        """
+        logger.info(f"Processing text in column '{text_column}' of DataFrame with {len(df)} rows")
+        df[output_column] = df[text_column].apply(self.clean_sentences)
+        return df
+    
+    def compute_text_statistics(self, df, text_column='clean_sent'):
+        """Compute statistical metrics about the text data.
+        
+        Calculates several statistical measures about the text data, including length
+        distributions and document counts. This is useful for understanding the dataset
+        characteristics and identifying potential data quality issues.
+        
+        Args:
+            df (pandas.DataFrame): DataFrame containing text data. The function will 
+                add a temporary 'text_length' column to this DataFrame.
+            text_column (str, optional): Name of the column containing the text to analyze.
+                Defaults to 'clean_sent'.
+            
+        Returns:
+            dict: Dictionary with text statistics including:
+                - mean_length: Average word count per document
+                - median_length: Median word count across documents
+                - min_length: Word count of shortest document
+                - max_length: Word count of longest document
+                - std_length: Standard deviation of word counts
+                - total_documents: Total number of documents in the dataset
+                - empty_documents: Number of empty or non-string documents
+        
+        Examples:
+            >>> processor = TextProcessor()
+            >>> df = pd.DataFrame({'clean_sent': ['This is a test', 'Another longer example', '']})
+            >>> stats = processor.compute_text_statistics(df)
+            >>> print(f"Average document length: {stats['mean_length']:.1f} words")
+            >>> print(f"Empty documents: {stats['empty_documents']}")
+        """
+        # Calculate text lengths
+        df['text_length'] = df[text_column].apply(lambda x: len(x.split()) if isinstance(x, str) else 0)
+        
+        stats = {
+            'mean_length': df['text_length'].mean(),
+            'median_length': df['text_length'].median(),
+            'min_length': df['text_length'].min(),
+            'max_length': df['text_length'].max(),
+            'std_length': df['text_length'].std(),
+            'total_documents': len(df),
+            'empty_documents': sum(df['text_length'] == 0)
+        }
+        
+        logger.info(f"Text statistics computed: avg length = {stats['mean_length']:.1f} words, "
+                   f"empty docs = {stats['empty_documents']} ({stats['empty_documents']/stats['total_documents']*100:.1f}%)")
+        
+        return stats
+    
+    @staticmethod
+    def load_data(file_path=None):
+        """Load earnings announcement data from the specified file.
+        
+        This static method provides a convenient way to load the earnings report dataset 
+        from a CSV file (typically in gzip format) without needing to instantiate the class.
+        
+        Args:
+            file_path (str, optional): Path to the data file. If None, uses the 
+                path from config (RAW_DATA_PATH).
+        
+        Returns:
+            pandas.DataFrame: The loaded dataset containing earnings reports and
+                associated financial data.
+        
+        Raises:
+            FileNotFoundError: If the specified file doesn't exist.
+            pd.errors.ParserError: If there's a problem parsing the CSV file.
+            
+        Example:
+            >>> df = TextProcessor.load_data('data/earnings_reports.csv.gz')
+            >>> print(f"Loaded dataset with {len(df)} rows and {len(df.columns)} columns")
+        """
+        if file_path is None:
+            # Use the data path from config
+            file_path = RAW_DATA_PATH
+        
+        df = pd.read_csv(file_path, compression='gzip')
+        logger.info(f"Dataset loaded with shape: {df.shape}")
+        return df

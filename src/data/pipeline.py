@@ -13,8 +13,8 @@ Example:
     
     >>> pipeline = DataPipeline()
     >>> pipeline.load_data()
-    >>> pipeline.preprocess()
-    >>> pipeline.create_splits()
+    >>> pipeline.clean_text()
+    >>> pipeline.split_data()
     >>> pipeline.save_splits()
 """
 
@@ -155,120 +155,73 @@ class DataPipeline:
             logger.error(f"Error loading data: {str(e)}")
             raise
     
-    def preprocess(self, data=None, replace_numbers=True, filter_bad_sentences=True):
-        """Preprocess the loaded financial text data for analysis.
-        
-        Applies text normalization, cleaning, and optional transformations to
-        prepare the raw text data for feature extraction and modeling.
-        
-        Args:
-            data (pd.DataFrame, optional): Data to preprocess. If None, uses the
-                previously loaded raw_data. Defaults to None.
-            replace_numbers (bool, optional): Whether to replace numbers with 
-                token placeholders. Defaults to True.
-            filter_bad_sentences (bool, optional): Whether to remove malformed
-                or problematic sentences. Defaults to True.
-                
-        Returns:
-            pd.DataFrame: The preprocessed data with added 'processed_text' column.
-            
-        Raises:
-            ValueError: If no data is available to process.
-            
-        Example:
-            >>> pipeline = DataPipeline()
-            >>> pipeline.load_data()
-            >>> processed = pipeline.preprocess(replace_numbers=False)
-            >>> processed['processed_text'].iloc[0][:100]  # View first 100 chars
-        """
-        if data is None:
-            data = self.raw_data.copy()
-        
-        logger.info("Starting preprocessing")
-        
-        # Record preprocessing config
-        self.config["preprocessing"] = {
-            "replace_numbers": replace_numbers,
-            "filter_bad_sentences": filter_bad_sentences
-        }
-        
-        # Import text processor here to avoid circular imports
-        from src.data.text_processor import TextProcessor
-        text_processor = TextProcessor()
-        
-        # Process the text column(s) - assumes 'text' column exists
-        if 'text' in data.columns:
-            logger.info(f"Processing {len(data)} text records")
-            data['processed_text'] = data['text'].apply(
-                lambda x: text_processor.process_text(
-                    x, 
-                    replace_numbers=replace_numbers,
-                    filter_bad=filter_bad_sentences
-                )
-            )
-        
-        self.processed_data = data
-        logger.info("Preprocessing completed")
-        return self.processed_data
-    
     def clean_text(self, data=None):
         """Clean financial text by removing noise and normalizing content.
         
-        Applies text cleaning operations like removing HTML tags, URLs,
-        handling special characters, and normalizing whitespace.
+        This method applies specialized text cleaning for financial earnings reports
+        using the clean_sentences function from TextProcessor. The cleaning process:
+        1. Replaces financial numbers with a standardized token
+        2. Removes short or non-alphabetic tokens
+        3. Filters out sentences with too many financial numbers
+        4. Filters out sentences that are too short
         
         Args:
             data (pd.DataFrame, optional): Data containing text to clean. If None,
                 uses the previously loaded raw_data. Defaults to None.
-                
+                    
         Returns:
             pd.DataFrame: DataFrame with added 'clean_sent' column containing
-                the cleaned text.
+                the cleaned and filtered text suitable for NLP analysis.
                 
-        Note:
-            This performs simpler cleaning than the full preprocess method and is
-            useful for exploratory analysis or when full preprocessing might
-            remove too much information.
+        Example:
+            >>> pipeline = DataPipeline()
+            >>> pipeline.load_data()
+            >>> cleaned_df = pipeline.clean_text()
+            >>> print(cleaned_df['clean_sent'].iloc[0][:100])  # Show first 100 chars
         """
         if data is None:
             data = self.raw_data.copy()
         
+        # Import TextProcessor and use its clean_sentences method
         from src.data.text_processor import TextProcessor
         processor = TextProcessor()
         
-        # Determine text column - use 'ea_text' as default if available
+        # Determine text column
         text_col = 'ea_text' if 'ea_text' in data.columns else 'text'
         
-        data['clean_sent'] = data[text_col].apply(processor.clean_text)
+        # Process the dataframe using TextProcessor
+        data = processor.process_dataframe(data, text_column=text_col, output_column='clean_sent')
         self.processed_data = data
+        
+        logger.info(f"Applied financial text cleaning to {len(data)} records")
         return data
 
     def compute_text_statistics(self, text_column='clean_sent'):
         """Compute statistical metrics about the processed text data.
         
-        Calculates metrics such as character count, word count, sentence count,
-        average sentence length, and readability scores for the text corpus.
+        Calculates metrics such as word count distributions, document counts,
+        and identifies empty documents in the dataset.
         
         Args:
             text_column (str, optional): Column name containing the text to analyze.
                 Defaults to 'clean_sent'.
                 
         Returns:
-            dict: Dictionary of text statistics with metrics like:
-                - total_chars: Total character count
-                - total_words: Total word count
-                - mean_sentence_length: Average words per sentence
-                - readability_scores: Flesch reading ease and other metrics
+            dict: Dictionary of text statistics including word count means,
+                distributions, and empty document counts.
                 
         Example:
             >>> pipeline = DataPipeline()
             >>> pipeline.load_data()
             >>> pipeline.clean_text()
             >>> stats = pipeline.compute_text_statistics()
-            >>> print(f"Average sentence length: {stats['mean_sentence_length']:.1f} words")
+            >>> print(f"Average document length: {stats['mean_length']:.1f} words")
         """
-        from src.data.data_processor import compute_text_statistics
-        return compute_text_statistics(self.processed_data, text_column)
+        # Use TextProcessor for computing text statistics
+        from src.data.text_processor import TextProcessor
+        processor = TextProcessor()
+        
+        return processor.compute_text_statistics(self.processed_data, text_column)
 
     def process_financial_data(self, data=None):
         """Process financial metrics and indicators in the earnings report data.
@@ -290,7 +243,7 @@ class DataPipeline:
         if data is None:
             data = self.processed_data
         
-        # Add financial processing logic or delegate to data_processor functions
+        # Add financial processing logic here
         # For now, just return the data
         self.processed_data = data
         return data
@@ -321,7 +274,6 @@ class DataPipeline:
         if column in self.processed_data.columns:
             self.processed_data['label'] = (self.processed_data[column] > threshold).astype(int)
         return self.processed_data
-    
     
     def split_data(self, data=None, target_column='BHAR0_2'):
         """Split data into train, validation and test sets.
@@ -468,10 +420,15 @@ class DataPipeline:
     def run_pipeline(self, output_dir="data/processed"):
         """Run the full data preprocessing pipeline from loading to saving.
         
-        Executes all steps of the data pipeline in sequence: loading raw data,
-        preprocessing text, splitting into train/val/test sets, and saving
-        the results to disk.
-        
+        Executes all steps of the data pipeline in sequence:
+        1. Loading raw data
+        2. Cleaning text using specialized financial text cleaning
+        3. Computing text statistics for quality assessment
+        4. Processing financial metrics
+        5. Generating classification labels
+        6. Splitting into train/val/test sets
+        7. Saving processed data to disk with version tracking
+            
         Args:
             output_dir (str, optional): Directory to save the processed data.
                 Defaults to "data/processed".
@@ -485,6 +442,9 @@ class DataPipeline:
             >>> print(f"Pipeline complete. Data version: {pipeline.data_version}")
         """
         self.load_data()
-        self.preprocess()
+        self.clean_text()  # Uses TextProcessor.clean_sentences()
+        self.compute_text_statistics()
+        self.process_financial_data()
+        self.generate_labels()
         self.split_data()
         return self.save_splits(output_dir)

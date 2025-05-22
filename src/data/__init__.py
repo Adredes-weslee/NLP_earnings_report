@@ -7,13 +7,10 @@ Handles loading, preprocessing, and versioning of earnings report data.
 from .pipeline import DataPipeline
 from .text_processor import TextProcessor
 from .data_versioner import DataVersioner
-from .data_processor import load_data, process_data, compute_text_statistics
 
+# Remove references to non-existent functions
 __all__ = [
     'DataPipeline',
     'TextProcessor',
-    'DataVersioner',
-    'load_data',
-    'process_data',
-    'compute_text_statistics'
+    'DataVersioner'
 ]

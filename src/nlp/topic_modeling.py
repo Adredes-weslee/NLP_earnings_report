@@ -1,6 +1,12 @@
-"""
-Consolidated topic modeling module for financial text analysis.
-Provides LDA and transformer-based topic modeling for earnings reports.
+"""Consolidated topic modeling module for financial text analysis.
+
+This module provides topic modeling capabilities for financial text analysis
+using LDA, NMF, and transformer-based approaches. It integrates with the
+centralized NLPProcessor for vectorization and creates cohesive topic models
+from the processed financial text.
+
+The main class, TopicModeler, handles the creation, tuning, and visualization
+of topic models for financial earnings reports.
 """
 
 import os
@@ -13,15 +19,18 @@ import joblib
 import pickle
 import sys
 from typing import List, Dict, Union, Optional, Tuple, Any
+
 from sklearn.decomposition import LatentDirichletAllocation, NMF
-from sklearn.feature_extraction.text import CountVectorizer
+from tmtoolkit.topicmod.evaluate import metric_coherence_gensim
+from wordcloud import WordCloud
 
 # Import configuration values
 from ..config import (NUM_TOPICS, RANDOM_STATE, TOPIC_WORD_PRIOR, DOC_TOPIC_PRIOR_FACTOR,
                   MAX_FEATURES, NGRAM_RANGE, MAX_DOC_FREQ, TOPIC_MODEL_PATH, MODEL_DIR,
                   OPTIMAL_TOPICS, LDA_MAX_ITER, LDA_LEARNING_DECAY, LDA_LEARNING_OFFSET)
-from tmtoolkit.topicmod.evaluate import metric_coherence_gensim
-from wordcloud import WordCloud
+
+# Import the centralized NLPProcessor
+from .nlp_processing import NLPProcessor
 
 # Optional imports for BERTopic
 try:
@@ -47,13 +56,16 @@ class TopicModeler:
         topic_word_prior (float): Topic-word prior for LDA (alpha parameter).
         doc_topic_prior_factor (float): Document-topic prior factor for LDA (beta).
         model: The underlying topic model instance.
-        vectorizer: Document vectorizer used for creating document-term matrices.
+        nlp_processor (NLPProcessor): Centralized processor for text vectorization.
         topic_words: List of words associated with each topic.
         feature_names: Names of features in the document-term matrix.
         topic_word_distributions: Word probability distributions for each topic.
     """
-    def __init__(self, method: str = 'lda', num_topics: int = NUM_TOPICS, random_state: int = RANDOM_STATE,
-                 topic_word_prior: float = TOPIC_WORD_PRIOR, doc_topic_prior_factor: float = DOC_TOPIC_PRIOR_FACTOR):
+    def __init__(self, method: str = 'lda', num_topics: int = NUM_TOPICS, 
+                 random_state: int = RANDOM_STATE,
+                 topic_word_prior: float = TOPIC_WORD_PRIOR, 
+                 doc_topic_prior_factor: float = DOC_TOPIC_PRIOR_FACTOR,
+                 nlp_processor: NLPProcessor = None):
         """Initialize the topic modeler with specified parameters.
         
         Args:
@@ -67,20 +79,24 @@ class TopicModeler:
                 Defaults to value from config (TOPIC_WORD_PRIOR).
             doc_topic_prior_factor (float): Document-topic prior factor for LDA (beta).
                 Defaults to value from config (DOC_TOPIC_PRIOR_FACTOR).
+            nlp_processor (NLPProcessor, optional): Centralized NLP processor to use for
+                vectorization. If None, a new one will be created when needed.
                 
         Example:
-            >>> modeler = TopicModeler(method='lda', num_topics=20)
-            >>> modeler.fit(texts)
-            >>> topics = modeler.transform(new_texts)
+            >>> # Using shared NLP processor
+            >>> nlp_proc = NLPProcessor(max_features=5000)
+            >>> modeler = TopicModeler(method='lda', num_topics=20, nlp_processor=nlp_proc)
+            >>> dtm, vocab = nlp_proc.create_document_term_matrix(texts)
+            >>> modeler.fit(dtm, feature_names=vocab)
         """
         self.method = method
         self.num_topics = num_topics
         self.random_state = random_state
         self.topic_word_prior = topic_word_prior
         self.doc_topic_prior_factor = doc_topic_prior_factor
+        self.nlp_processor = nlp_processor
         
         self.model = None
-        self.vectorizer = None
         self.topic_words = None
         self.feature_names = None
         self.topic_word_distributions = None
@@ -95,49 +111,52 @@ class TopicModeler:
     def create_document_term_matrix(self, texts: List[str], save_path: str = None) -> Tuple:
         """Create a document-term matrix from cleaned texts.
         
-        This method constructs a document-term matrix using CountVectorizer
-        with financial text-specific settings. It filters out common stopwords
-        and applies parameters from the configuration.
+        This method constructs a document-term matrix using the centralized 
+        NLPProcessor with financial text-specific settings. It delegates the
+        vectorization to NLPProcessor to ensure consistent tokenization across
+        all pipeline components.
         
         Args:
             texts (List[str]): List of cleaned text documents.
-            save_path (str, optional): Path to save the vectorizer for later use.
-                If None, the vectorizer is not saved.
+            save_path (str, optional): Path to save the processor for later use.
+                If None, the processor is not saved. Defaults to None.
             
         Returns:
             Tuple: A tuple containing:
                 - document-term matrix (sparse matrix)
-                - vectorizer object (CountVectorizer)
-                - vocabulary/feature names (list)
+                - list of vocabulary terms (feature names)
                 
         Example:
-            >>> dtm, vec, vocab = modeler.create_document_term_matrix(texts)
+            >>> dtm, vocab = modeler.create_document_term_matrix(texts)
             >>> print(f"Matrix shape: {dtm.shape}")
+            
+        Note:
+            This method uses NLPProcessor for vectorization to ensure consistency
+            across all components of the pipeline.
         """
-        from nltk.corpus import stopwords
-        stops = stopwords.words('english')
-        vec = CountVectorizer(
-            token_pattern=r'\b[a-zA-Z_]{3,}[a-zA-Z]*\b',
-            ngram_range=NGRAM_RANGE,
-            max_features=MAX_FEATURES,
-            stop_words=stops,
-            max_df=MAX_DOC_FREQ
-        )
+        # Use existing NLPProcessor or create a new one
+        if self.nlp_processor is None:
+            self.nlp_processor = NLPProcessor(
+                max_features=MAX_FEATURES,
+                ngram_range=NGRAM_RANGE,
+                max_df=MAX_DOC_FREQ,
+                random_state=self.random_state
+            )
+            logger.info("Created new NLPProcessor for document-term matrix creation")
         
-        dtm = vec.fit_transform(texts)
-        vocab = vec.get_feature_names_out()
+        # Create document-term matrix using NLPProcessor
+        dtm, vocab = self.nlp_processor.create_document_term_matrix(texts)
+        self.feature_names = vocab
         
         logger.info(f"DTM shape (documents x features): {dtm.shape}")
         
+        # Save the processor if requested
         if save_path:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            with open(save_path, 'wb') as f:
-                pickle.dump(vec, f)
-            logger.info(f"Vectorizer saved to {save_path}")
+            self.nlp_processor.save(save_path)
+            logger.info(f"NLP processor saved to {save_path}")
         
-        self.vectorizer = vec
-        self.feature_names = vocab
-        return dtm, vec, vocab
+        return dtm, vocab
     
     def optimize_num_topics(self, dtm, vocab=None, 
                            min_topics: int = 10, max_topics: int = 100, step: int = 5, 
@@ -171,7 +190,7 @@ class TopicModeler:
             corresponding coherence scores and perplexity values.
             
         Example:
-            >>> dtm, _, vocab = modeler.create_document_term_matrix(texts)
+            >>> dtm, vocab = nlp_processor.create_document_term_matrix(texts)
             >>> results = modeler.optimize_num_topics(dtm, vocab, min_topics=5, max_topics=50, step=5)
             >>> best_result = max(results, key=lambda x: x.get('coherence', 0))
             >>> print(f"Best number of topics: {best_result['topics']}")
@@ -272,8 +291,8 @@ class TopicModeler:
         
         return optimal_topics, plt.gcf()
     
-    def fit(self, dtm, feature_names=None, vectorizer=None, n_topics=None, 
-        save_model=True, model_dir=None):
+    def fit(self, dtm, feature_names=None, n_topics=None, 
+            nlp_processor=None, save_model=True, model_dir=None):
         """Fit the topic model with the specified document-term matrix.
         
         This method trains the topic model using the provided document-term matrix.
@@ -286,10 +305,10 @@ class TopicModeler:
                 For BERTopic: can be either documents or embeddings.
             feature_names (list, optional): List of feature names (vocabulary terms).
                 If None, uses self.feature_names. Defaults to None.
-            vectorizer (CountVectorizer, optional): Vectorizer used to create DTM.
-                If provided, it's stored for later use. Defaults to None.
             n_topics (int, optional): Number of topics to extract.
                 If None, uses self.num_topics. Defaults to None.
+            nlp_processor (NLPProcessor, optional): NLPProcessor used to create DTM.
+                If provided, it's stored for later use. Defaults to None.
             save_model (bool, optional): Whether to save the trained model to disk.
                 Defaults to True.
             model_dir (str, optional): Directory to save the model.
@@ -304,8 +323,10 @@ class TopicModeler:
             ValueError: If an unsupported topic modeling method is specified
             
         Example:
-            >>> dtm, vectorizer, vocab = modeler.create_document_term_matrix(texts)
-            >>> model, topics = modeler.fit(dtm, feature_names=vocab, vectorizer=vectorizer)
+            >>> # Using the centralized NLPProcessor
+            >>> nlp_proc = NLPProcessor(max_features=5000)
+            >>> dtm, vocab = nlp_proc.create_document_term_matrix(texts)
+            >>> model, topics = modeler.fit(dtm, feature_names=vocab, nlp_processor=nlp_proc)
             >>> print(f"Topics shape: {topics.shape}")
         """
         # Store feature names if provided
@@ -316,9 +337,9 @@ class TopicModeler:
         if n_topics is not None:
             self.num_topics = int(n_topics)
         
-        # Store the vectorizer if provided
-        if vectorizer is not None:
-            self.vectorizer = vectorizer
+        # Store the NLPProcessor if provided
+        if nlp_processor is not None:
+            self.nlp_processor = nlp_processor
         
         # Ensure num_topics is an integer regardless of how it was set
         if not isinstance(self.num_topics, int):
@@ -378,9 +399,13 @@ class TopicModeler:
                 pickle.dump(model, f)
             logger.info(f"Topic model saved to {model_path}")
             
+            # Save NLPProcessor if available
+            if self.nlp_processor is not None:
+                self.nlp_processor.save(os.path.join(save_dir, 'nlp_processor'))
+                logger.info(f"NLPProcessor saved to {os.path.join(save_dir, 'nlp_processor')}")
+            
             # Save topic distributions if not too large
             if topics.shape[0] * topics.shape[1] < 10000000:  # ~10M elements
-                # Fix: Use save_dir instead of model_dir
                 np.save(os.path.join(save_dir, 'topic_distributions.npy'), topics)
                 logger.info(f"Topic distributions saved to {os.path.join(save_dir, 'topic_distributions.npy')}")
         
@@ -515,19 +540,19 @@ class TopicModeler:
         
         return fig
     
-    def transform(self, dtm):
-        """Transform document-term matrix to topic distributions.
+    def transform(self, texts_or_dtm):
+        """Transform texts or document-term matrix to topic distributions.
         
         This method applies a fitted topic model to new documents to extract
-        their topic distributions. It requires that the model has been previously
-        fitted using the fit() method.
+        their topic distributions. It accepts either raw texts or a pre-computed
+        document-term matrix, handling the vectorization when needed using the
+        shared NLPProcessor.
         
         Args:
-            dtm: Document-term matrix for the documents to transform.
-                Should match the format used during fitting:
-                - For LDA/NMF: Document-term matrix (sparse or dense)
-                - For BERTopic: Text documents or their embeddings
-            
+            texts_or_dtm: Either:
+                - List[str]: Text documents to transform
+                - scipy.sparse.matrix: Pre-computed document-term matrix
+                
         Returns:
             numpy.ndarray: Topic distributions for input documents. Each row
                 represents a document, and each column represents the document's
@@ -537,23 +562,35 @@ class TopicModeler:
             ValueError: If the model has not been fitted yet
             
         Example:
-            >>> # Fit model on training data
-            >>> train_dtm, _, vocab = modeler.create_document_term_matrix(train_texts)
-            >>> modeler.fit(train_dtm, feature_names=vocab)
-            >>> 
-            >>> # Transform new data
-            >>> test_dtm = modeler.vectorizer.transform(test_texts)
-            >>> topic_distributions = modeler.transform(test_dtm)
+            >>> # Transform raw texts
+            >>> topic_distributions = modeler.transform(test_texts)
             >>> print(f"Top topic for first document: {topic_distributions[0].argmax()}")
+            >>>
+            >>> # Transform pre-computed DTM
+            >>> dtm = nlp_processor.create_document_term_matrix(texts)[0]
+            >>> topic_distributions = modeler.transform(dtm)
         """
         if self.model is None:
             logger.error("Model not fitted. Call fit() first.")
             return None
         
+        # Handle either text documents or DTM
+        dtm = texts_or_dtm
+        if isinstance(texts_or_dtm, list) and all(isinstance(t, str) for t in texts_or_dtm):
+            # Text documents provided - need to vectorize
+            if self.nlp_processor is None:
+                logger.error("NLPProcessor not available for vectorization. Use fit() first or provide DTM.")
+                return None
+                
+            # Use the NLPProcessor to create document-term matrix
+            dtm, _ = self.nlp_processor.create_document_term_matrix(texts_or_dtm, fit=False)
+            logger.info(f"Created DTM from texts with shape: {dtm.shape}")
+        
+        # Transform with the appropriate model
         if self.method in ['lda', 'nmf']:
             return self.model.transform(dtm)
         elif self.method == 'bertopic':
-            # BERTopic requires documents, not DTM
+            # BERTopic requires documents or embeddings
             if hasattr(dtm, 'todense'):
                 dtm = dtm.todense()
             topics, probs = self.model.transform(dtm)
@@ -566,15 +603,16 @@ class TopicModeler:
         """Save the topic modeler and model to disk.
         
         This method serializes the topic modeler's state and the fitted model
-        to the specified path. It saves two files:
+        to the specified path. It saves multiple files:
         1. A state file (.pkl) containing configuration and metadata
         2. A model file (.pkl) containing the fitted model itself
+        3. NLPProcessor data for consistent vectorization across sessions
         
         The saved model can later be loaded using the load() class method.
         
         Args:
             path (str): Base path where the topic modeler will be saved.
-                The method will append '_state.pkl' and '_model.pkl' to this path.
+                The method will append suffixes to this path for different files.
                 If the directory doesn't exist, it will be created.
                 
         Raises:
@@ -583,11 +621,9 @@ class TopicModeler:
             
         Example:
             >>> modeler = TopicModeler(method='lda', num_topics=20)
+            >>> dtm, vocab = nlp_processor.create_document_term_matrix(texts)
             >>> modeler.fit(dtm, feature_names=vocab)
             >>> modeler.save('models/topics/financial_topics')
-            # Creates:
-            # - models/topics/financial_topics_state.pkl
-            # - models/topics/financial_topics_model.pkl
         """
         os.makedirs(os.path.dirname(path), exist_ok=True)
         
@@ -610,6 +646,10 @@ class TopicModeler:
             with open(f"{path}_model.pkl", 'wb') as f:
                 pickle.dump(self.model, f)
         
+        # Save the NLPProcessor if available
+        if self.nlp_processor is not None:
+            self.nlp_processor.save(f"{path}_nlp_processor")
+        
         logger.info(f"Topic modeler saved to {path}")    
         
     @classmethod
@@ -617,13 +657,12 @@ class TopicModeler:
         """Load a previously saved topic modeler from disk.
         
         This class method reconstructs a TopicModeler instance from files
-        saved using the save() method. It loads both the state (configuration
-        and metadata) and the fitted model if available.
+        saved using the save() method. It loads the state, fitted model,
+        and NLPProcessor if available.
         
         Args:
             path (str): Base path where the topic modeler was saved.
-                The method will append '_state.pkl' and '_model.pkl' to this path
-                to locate the saved files.
+                The method will append suffixes to locate the saved files.
             
         Returns:
             TopicModeler: A new TopicModeler instance with the same configuration
@@ -637,17 +676,22 @@ class TopicModeler:
             >>> # Load a previously saved model
             >>> modeler = TopicModeler.load('models/topics/financial_topics')
             >>> # Use it to transform new documents
-            >>> new_dtm = vectorizer.transform(new_texts)
-            >>> topic_distributions = modeler.transform(new_dtm)
-            
-        Note:
-            If the model file is not found, the method will still return a
-            TopicModeler instance with the saved configuration, but without
-            a fitted model. You'll need to call fit() before using transform().
+            >>> topic_distributions = modeler.transform(new_texts)
         """
         # Load state
         with open(f"{path}_state.pkl", 'rb') as f:
             state = pickle.load(f)
+        
+        # Load NLPProcessor if available
+        nlp_processor = None
+        try:
+            from .nlp_processing import NLPProcessor
+            nlp_processor = NLPProcessor.load(f"{path}_nlp_processor")
+            logger.info("Loaded NLPProcessor")
+        except FileNotFoundError:
+            logger.info("No NLPProcessor found, will create one if needed")
+        except Exception as e:
+            logger.warning(f"Error loading NLPProcessor: {str(e)}")
         
         # Create instance
         instance = cls(
@@ -655,12 +699,14 @@ class TopicModeler:
             num_topics=state['num_topics'],
             random_state=state['random_state'],
             topic_word_prior=state.get('topic_word_prior', 0.01),
-            doc_topic_prior_factor=state.get('doc_topic_prior_factor', 50.0)
+            doc_topic_prior_factor=state.get('doc_topic_prior_factor', 50.0),
+            nlp_processor=nlp_processor
         )
         
         # Restore state
         instance.feature_names = state['feature_names']
         instance.topic_words = state['topic_words']
+        
         # Load model if available
         try:
             with open(f"{path}_model.pkl", 'rb') as f:
@@ -668,51 +714,46 @@ class TopicModeler:
         except FileNotFoundError:
             logger.warning(f"Model file not found at {path}_model.pkl")
         
-        # Try to load vectorizer from a standard location
-        vectorizer_path = f"{os.path.dirname(path)}/vectorizer.pkl"
-        if os.path.exists(vectorizer_path):
-            try:
-                with open(vectorizer_path, 'rb') as f:
-                    instance.vectorizer = pickle.load(f)
-                logger.info(f"Vectorizer loaded from {vectorizer_path}")
-            except Exception as e:
-                logger.warning(f"Failed to load vectorizer from {vectorizer_path}: {str(e)}")
-        
         return instance    
     
     def extract_topics(self, texts: List[str]) -> List[Tuple[int, float]]:
-        """Extract topics from a list of text documents."""
+        """Extract topics from a list of text documents.
+        
+        This method analyzes text documents to determine their topic distribution
+        using the fitted topic model. It handles the vectorization process using
+        the shared NLPProcessor.
+        
+        Args:
+            texts (List[str]): List of text documents to analyze.
+            
+        Returns:
+            List[Tuple[int, float]]: List of (topic_id, probability) pairs for
+                the most relevant topics in the documents. Typically returns
+                the top 5 topics or fewer.
+                
+        Raises:
+            ValueError: If the model hasn't been fitted yet.
+            
+        Example:
+            >>> topics = modeler.extract_topics(["Financial earnings increased this quarter"])
+            >>> print(f"Top topic: {topics[0][0]} with probability {topics[0][1]:.3f}")
+        """
         if self.model is None:
             logger.error("Model not fitted. Call fit() first.")
             raise ValueError("Topic model not fitted. Please train the model before extracting topics.")
         
-        # If vectorizer is not available, try to recreate it from feature_names
-        if self.vectorizer is None and hasattr(self, 'feature_names') and self.feature_names is not None:
-            try:
-                from sklearn.feature_extraction.text import CountVectorizer
-                logger.info(f"Attempting to rebuild vectorizer from {len(self.feature_names)} feature names")
-                # Create a vectorizer with the same vocabulary
-                vocab_dict = {word: idx for idx, word in enumerate(self.feature_names)}
-                self.vectorizer = CountVectorizer(vocabulary=vocab_dict)
-                logger.info("Successfully created vectorizer from feature names")
-            except Exception as e:
-                logger.error(f"Failed to create vectorizer from feature names: {str(e)}")
-        
         try:
-            # First try with existing vectorizer
-            if self.vectorizer is not None:
-                try:
-                    dtm = self.vectorizer.transform(texts)
-                    logger.info(f"Using existing vectorizer to create DTM with shape: {dtm.shape}")
-                    
-                    # Check if we got any terms at all
-                    if dtm.sum() == 0:
-                        raise ValueError("No terms remained after applying existing vectorizer")
-                        
-                except (ValueError) as e:
-                    raise ValueError(f"Existing vectorizer failed: {str(e)}")
+            # Use NLPProcessor for consistent vectorization
+            if self.nlp_processor is not None:
+                # Use existing NLPProcessor
+                dtm, _ = self.nlp_processor.create_document_term_matrix(texts, fit=False, use_existing=True)
+                logger.info(f"Using NLPProcessor to create DTM with shape: {dtm.shape}")
+                
+                # Check if we got any terms at all
+                if dtm.sum() == 0:
+                    raise ValueError("No terms remained after applying NLPProcessor vectorizer")
             else:
-                raise ValueError("Vectorizer not available")
+                raise ValueError("NLPProcessor not available")
                     
         except ValueError as e:
             # Graceful error handling - return a default topic with warning
@@ -725,7 +766,7 @@ class TopicModeler:
         # Process with the model
         try:
             # Transform into topic space
-            topic_distributions = self.model.transform(dtm)
+            topic_distributions = self.transform(dtm)
             
             # Get the top topics for this document
             result = []
@@ -746,12 +787,20 @@ class TopicModeler:
     def get_topic_words(self, topic_id: int, top_n: int = 10) -> List[str]:
         """Get the top words for a specific topic.
         
+        This method returns the most representative words for a given topic.
+        It first checks if topic words are already cached, then tries to
+        extract them from the fitted model.
+        
         Args:
             topic_id (int): The ID of the topic to get words for
             top_n (int, optional): Number of top words to return. Defaults to 10.
             
         Returns:
             List[str]: List of the top words for the specified topic
+            
+        Example:
+            >>> words = modeler.get_topic_words(5, top_n=15)
+            >>> print(f"Topic 5 words: {', '.join(words)}")
         """
         # First check if we already have topic words cached
         if self.topic_words is not None and topic_id in self.topic_words:

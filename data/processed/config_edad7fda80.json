@@ -1,0 +1,16 @@
+{
+  "data_path": "data/ExpTask2Data.csv.gz",
+  "random_state": 42,
+  "test_size": 0.15000000000000005,
+  "val_size": 0.15,
+  "processing_date": "2025-05-23 01:45:03",
+  "data_version": "edad7fda80",
+  "num_samples": 12500,
+  "data_splits": {
+    "train_size": 9030,
+    "val_size": 1594,
+    "test_size": 1876,
+    "target_column": "BHAR0_2",
+    "stratify_column": "label"
+  }
+}

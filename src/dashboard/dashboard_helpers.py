@@ -304,13 +304,13 @@ def extract_topic_visualization(topic_model: TopicModeler) -> str:
     # First check if we can use a better pyLDAvis visualization
     try:
         import pyLDAvis
-        import pyLDAvis.sklearn
+        import pyLDAvis.lda_model
         
         if hasattr(topic_model, 'model') and hasattr(topic_model, 'dtm'):
             if hasattr(topic_model, 'nlp_processor') and topic_model.nlp_processor is not None:
                 vectorizer = topic_model.nlp_processor.count_vectorizer
                 if vectorizer is not None:
-                    prepared_data = pyLDAvis.sklearn.prepare(
+                    prepared_data = pyLDAvis.lda_model.prepare(
                         topic_model.model, topic_model.dtm, vectorizer
                     )
                     return pyLDAvis.prepared_data_to_html(prepared_data)

@@ -88,7 +88,7 @@ class FeatureExtractor:
         
         logger.info(f"Initialized FeatureExtractor with max_features={max_features}")
     
-    def extract_financial_metrics(self, text):
+    def extract_financial_metrics(self, data):
         """Extract financial metrics from text.
         
         This method identifies and extracts financial metrics like revenue,
@@ -106,12 +106,22 @@ class FeatureExtractor:
         """
         import re
         
+        # Process input - handle both DataFrame and string inputs
+        if isinstance(data, pd.DataFrame):
+            if 'text' in data.columns and not data.empty:
+                text = data['text'].iloc[0]
+            else:
+                text = str(data.iloc[0]) if not data.empty else ""
+        else:
+            text = str(data)
+        
         # Basic patterns for financial metrics
         patterns = {
-            'revenue': r'\$?\s*(\d+(?:\.\d+)?)\s*(?:million|billion|m|b)?\s*(?:in)?\s*(?:revenue|sales)',
-            'profit': r'\$?\s*(\d+(?:\.\d+)?)\s*(?:million|billion|m|b)?\s*(?:in)?\s*(?:profit|net income)',
-            'eps': r'(?:earnings per share|eps).{1,50}?\$?\s*(\d+\.\d+)',
-            'growth': r'(?:growth|increase).{1,20}?\s*(\d+(?:\.\d+)?)\s*%',
+            'revenue_dollar': r'\$?\s*(\d+(?:\.\d+)?)\s*(?:million|billion|m|b)?\s*(?:in)?\s*(?:revenue|sales)',
+            'profit_dollar': r'\$?\s*(\d+(?:\.\d+)?)\s*(?:million|billion|m|b)?\s*(?:in)?\s*(?:profit|net income)',
+            'eps_dollar': r'(?:earnings per share|eps).{1,50}?\$?\s*(\d+\.\d+)',
+            'growth_percentage': r'(?:growth|increase).{1,20}?\s*(\d+(?:\.\d+)?)\s*%',
+            'margin_percentage': r'(?:margin).{1,20}?\s*(\d+(?:\.\d+)?)\s*%',
         }
         
         results = {}

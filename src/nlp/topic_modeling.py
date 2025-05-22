@@ -743,24 +743,36 @@ class TopicModeler:
             raise ValueError("Topic model not fitted. Please train the model before extracting topics.")
         
         try:
-            # Use NLPProcessor for consistent vectorization
-            if self.nlp_processor is not None:
-                # Use existing NLPProcessor
-                dtm, _ = self.nlp_processor.create_document_term_matrix(texts, fit=False, use_existing=True)
-                logger.info(f"Using NLPProcessor to create DTM with shape: {dtm.shape}")
-                
-                # Check if we got any terms at all
-                if dtm.sum() == 0:
-                    raise ValueError("No terms remained after applying NLPProcessor vectorizer")
+            if len(texts) <= 2:
+                logger.info(f"Small input detected ({len(texts)} documents)")
+                if self.nlp_processor is not None:
+                    # For small inputs, we still need to use the existing vocabulary
+                    dtm, _ = self.nlp_processor.create_document_term_matrix(texts, fit=False, use_existing=True)
+                    logger.info(f"Used NLPProcessor for small input, DTM shape: {dtm.shape}")
+                    
+                    # Check if we got any terms at all
+                    if dtm.sum() == 0:
+                        raise ValueError("No terms remained after applying NLPProcessor vectorizer")
+                else:
+                    raise ValueError("NLPProcessor not available")
             else:
-                raise ValueError("NLPProcessor not available")
+                # Standard processing for normal-sized inputs
+                if self.nlp_processor is not None:
+                    # Use existing NLPProcessor
+                    dtm, _ = self.nlp_processor.create_document_term_matrix(texts, fit=False, use_existing=True)
+                    logger.info(f"Using NLPProcessor to create DTM with shape: {dtm.shape}")
+                    
+                    # Check if we got any terms at all
+                    if dtm.sum() == 0:
+                        raise ValueError("No terms remained after applying NLPProcessor vectorizer")
+                else:
+                    raise ValueError("NLPProcessor not available")
                     
         except ValueError as e:
             # Graceful error handling - return a default topic with warning
             logger.warning(f"Topic extraction failed: {str(e)}. Using fallback approach.")
             
             # Create a placeholder result that won't break the UI
-            # For LDA models, this would typically be [(topic_id, probability)]
             return [(0, 1.0)]
         
         # Process with the model

@@ -1,4 +1,4 @@
-name: earnings-nlp-test
+name: earnings-nlp
 channels:
   - defaults
   - conda-forge

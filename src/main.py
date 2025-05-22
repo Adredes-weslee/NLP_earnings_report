@@ -81,7 +81,7 @@ def run_data_pipeline(args):
     
     This function executes the complete data preprocessing workflow:
     1. Loads raw data from specified path
-    2. Cleans and normalizes text data
+    2. Cleans and normalizes text data using specialized financial text cleaning
     3. Computes text statistics (length, complexity)
     4. Processes financial metrics
     5. Generates target labels for prediction tasks
@@ -117,23 +117,23 @@ def run_data_pipeline(args):
     logger.info("Starting data pipeline")
     
     try:
-        # Create and run pipeline with parameters matching DataPipeline constructor
+        # Create pipeline with parameters matching DataPipeline constructor
         pipeline = DataPipeline(
-            data_path=args.input_file,  # Changed from input_file to data_path
-            random_state=args.seed,     # Changed from seed to random_state 
-            test_size=1.0 - args.train_ratio - args.val_ratio,  # Calculate test_size
-            val_size=args.val_ratio    # val_size parameter
+            data_path=args.input_file,
+            random_state=args.seed,
+            test_size=1.0 - args.train_ratio - args.val_ratio,
+            val_size=args.val_ratio
         )
-          # Run pipeline stages
-        pipeline.load_data()
-        pipeline.clean_text()
-        pipeline.compute_text_statistics()
-        pipeline.process_financial_data()
-        pipeline.generate_labels()
-        pipeline.split_data()
-        paths = pipeline.save_splits(output_dir=args.output_dir)  # Pass output_dir here
-        version_id = pipeline.data_version
         
+        # Run the complete pipeline using the streamlined run_pipeline method
+        paths = pipeline.run_pipeline(output_dir=args.output_dir)
+        
+        # Get sample text for logging
+        if len(pipeline.processed_data) > 0:
+            sample_text = pipeline.processed_data['clean_sent'].iloc[0][:100]
+            logger.info(f"Sample cleaned text: {sample_text}...")
+        
+        version_id = pipeline.data_version
         logger.info(f"Data pipeline completed successfully. Version: {version_id}")
         return version_id
     
@@ -230,7 +230,7 @@ def run_nlp_analysis(args, version_id=None):
         # 3. Create and train topic model
         logger.info(f"Training topic model with {args.num_topics} topics")
         # Get document-term matrix from embedding processor
-        dtm = embedding_processor.vectorizer.transform(texts)
+        dtm = embedding_processor.get_document_term_matrix(texts)
         feature_names = embedding_processor.vocab
         
         topic_modeler = TopicModeler(method=args.topic_method, num_topics=args.num_topics)
@@ -238,23 +238,43 @@ def run_nlp_analysis(args, version_id=None):
         
         # Save the topic model
         topic_modeler.save(f'models/topics/{args.topic_method}_model')
-          # 4. Feature extraction and model training
+        # 4. Feature extraction using the refactored FeatureExtractor
         logger.info("Extracting features and training models")
         feature_extractor = FeatureExtractor(
-            use_topics=True,
-            use_sentiment=True,
-            use_metrics=True,
-            use_embeddings=True
+            max_features=args.max_features,
+            random_state=RANDOM_STATE,
+            nlp_processor=embedding_processor.nlp_processor  # Reuse the NLPProcessor
         )
-        feature_extractor.set_embedding_model(embedding_processor)
-        feature_extractor.set_sentiment_analyzer(sentiment_analyzer)
-        feature_extractor.set_topic_model(topic_modeler)
-          # Extract features from training data
-        X_train, feature_names = feature_extractor.extract_features(
-            train_df, 
-            text_column=text_column  # Use the identified text column
+
+        # Get texts from DataFrame 
+        texts = train_df[text_column].fillna('').tolist()
+
+        # Extract features using the refactored method
+        feature_dict = feature_extractor.extract_features(
+            texts,
+            include_statistical=True,
+            include_semantic=True,
+            include_topics=True,
+            include_transformer=False,  # Set to True if you want to use transformers
+            semantic_components=50,
+            n_topics=args.num_topics
         )
-        
+
+        # Combine features for modeling - use statistical, semantic and topics
+        X_train = feature_extractor.combine_features(
+            feature_dict, 
+            feature_sets=['statistical', 'semantic', 'topics']
+        )
+
+        # Create feature names for interpretability
+        feature_names = []
+        for i in range(feature_dict['statistical'].shape[1]):
+            feature_names.append(f'stat_{i}')
+        for i in range(feature_dict['semantic'].shape[1]):
+            feature_names.append(f'sem_{i}')
+        for i in range(feature_dict['topics'].shape[1]):
+            feature_names.append(f'topic_{i}')
+
         # Train regression model if target exists
         if 'BHAR0_2' in train_df.columns:
             y_reg_train = train_df['BHAR0_2'].values
@@ -262,29 +282,26 @@ def run_nlp_analysis(args, version_id=None):
             from sklearn.linear_model import Lasso
             lasso = Lasso(alpha=0.001, max_iter=10000)
             lasso.fit(X_train, y_reg_train)
-              # Set feature importances
-            feature_extractor.set_feature_importances(lasso.coef_, feature_names)
+            
+            # Store feature importances in a DataFrame
+            importances_df = pd.DataFrame({
+                'feature': feature_names,
+                'importance': lasso.coef_
+            })
+            
+            # Sort by absolute importance
+            importances_df['abs_importance'] = importances_df['importance'].abs()
+            top_features = importances_df.sort_values('abs_importance', ascending=False).head(10)
             
             # Save feature extractor with error handling
             try:
                 os.makedirs('models/features', exist_ok=True)
-                
-                # Try an alternative path if the first one fails
-                try:
-                    feature_extractor.save('models/features/combined_features')
-                except PermissionError:
-                    # Try with a timestamped filename to avoid conflicts
-                    import time
-                    timestamp = int(time.time())
-                    alt_path = f'models/features/combined_features_{timestamp}'
-                    logger.warning(f"Permission denied on original path, trying alternative: {alt_path}")
-                    feature_extractor.save(alt_path)
+                feature_extractor.save('models/features/combined_features')
             except Exception as e:
                 logger.warning(f"Failed to save feature extractor: {str(e)}")
             
             # Print top features
             logger.info("Top predictive features:")
-            top_features = feature_extractor.get_top_features(n=10)
             for _, row in top_features.iterrows():
                 logger.info(f"{row['feature']}: {row['importance']:.6f}")
         
@@ -341,6 +358,7 @@ def run_full_pipeline(data_path=None, n_topics=None, force_reprocess=False, tune
         'force_reprocess': force_reprocess,
         'train_ratio': 1.0 - TEST_SIZE - VAL_SIZE,
         'val_ratio': VAL_SIZE / (1.0 - TEST_SIZE),  # Adjusted to match config's proportions
+        'seed': RANDOM_STATE,
         'text_column': 'sent'
     })
     

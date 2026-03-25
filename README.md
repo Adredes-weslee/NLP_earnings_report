@@ -2,12 +2,26 @@
 
 Analyze earnings-report text from data/ExpTask2Data.csv.gz and tie it to market reaction via `BHAR0_2`.
 
-Provide two ways to use the system: a CLI pipeline in src/main.py and a Streamlit dashboard in.
+Use the CLI pipeline in `src/main.py` for preprocessing and modeling, or launch the Streamlit dashboard in `src/dashboard/app.py` for exploration.
 
 <!-- README_SURFACE_START -->
-![Python](https://img.shields.io/badge/Python-NLP_Pipeline-3776AB?style=flat-square&logo=python&logoColor=white) ![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-FF4B4B?style=flat-square&logo=streamlit&logoColor=white) ![Finance](https://img.shields.io/badge/Finance-Earnings_Reports-1F6FEB?style=flat-square)
+```mermaid
+flowchart LR
+  A["Raw dataset<br/>data/ExpTask2Data.csv.gz"] --> B["Clean, label, split<br/>src/data/pipeline.py"]
+  B --> C["Processed data<br/>data/processed/*.csv + config_*.json"]
+  C --> D["NLP analysis<br/>src/nlp/*"]
+  D --> E["Saved artifacts<br/>models/embeddings | sentiment | topics | features"]
+  C --> F["Streamlit dashboard<br/>src/dashboard/app.py + streamlit_app.py"]
+  E --> F
+  G["CLI orchestrator<br/>src/main.py"] --> B
+  G --> D
+  G --> F
+```
 
 [![Portfolio Article](https://img.shields.io/badge/Portfolio%20Article-102A43?style=flat-square)](https://adredes-weslee.github.io/nlp/finance/machine-learning/data-science/2025/05/09/nlp-earnings-report-analysis.html) [![Live Demo](https://img.shields.io/badge/Live%20Demo-FF8B2B?style=flat-square)](https://adredes-weslee-nlp-earnings-report-streamlit-app-0uttcu.streamlit.app/)
+
+![Python](https://img.shields.io/badge/Python-NLP_Pipeline-3776AB?style=flat-square&logo=python&logoColor=white) ![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-FF4B4B?style=flat-square&logo=streamlit&logoColor=white) ![Finance](https://img.shields.io/badge/Finance-Earnings_Reports-1F6FEB?style=flat-square)
+
 ## Quickstart
 
 ```bash

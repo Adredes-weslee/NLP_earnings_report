@@ -22,6 +22,14 @@ import os
 os.environ["STREAMLIT_WATCH_MODULE_PATHS_EXCLUDE"] = "torch,torchaudio,torchvision,pytorch_pretrained_bert,transformers"
 
 import sys
+from pathlib import Path
+
+# Ensure `streamlit run src/dashboard/app.py` can resolve the top-level `src`
+# package regardless of how Streamlit sets up sys.path for the script entrypoint.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -35,7 +43,7 @@ import base64
 import re
 from datetime import datetime
 from io import StringIO
-
+ 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -184,7 +192,7 @@ class EarningsReportDashboard:
         # Configure page settings
         st.set_page_config(
             page_title=self.title,
-            page_icon="📊",
+            page_icon=":bar_chart:",
             layout="wide",
             initial_sidebar_state="expanded",
         )
@@ -231,7 +239,7 @@ class EarningsReportDashboard:
             
             # Display warning if no models could be loaded
             if not self.models:
-                st.warning("⚠️ No pre-trained models could be loaded. Some features may be unavailable.")
+                st.warning("No pre-trained models could be loaded. Some features may be unavailable.")
         
         except Exception as e:
             logger.error(f"Error initializing dashboard: {str(e)}")            

@@ -21,8 +21,20 @@ import sys
 from typing import List, Dict, Union, Optional, Tuple, Any
 
 from sklearn.decomposition import LatentDirichletAllocation, NMF
-from tmtoolkit.topicmod.evaluate import metric_coherence_gensim
-from wordcloud import WordCloud
+
+try:
+    from tmtoolkit.topicmod.evaluate import metric_coherence_gensim
+    COHERENCE_METRIC_AVAILABLE = True
+except ImportError:
+    metric_coherence_gensim = None
+    COHERENCE_METRIC_AVAILABLE = False
+
+try:
+    from wordcloud import WordCloud
+    WORDCLOUD_AVAILABLE = True
+except ImportError:
+    WordCloud = None
+    WORDCLOUD_AVAILABLE = False
 
 # Import configuration values
 from ..config import (NUM_TOPICS, RANDOM_STATE, TOPIC_WORD_PRIOR, DOC_TOPIC_PRIOR_FACTOR,
@@ -221,14 +233,19 @@ class TopicModeler:
             
             lda.fit(sample)
             
-            umass = metric_coherence_gensim(
-                'u_mass',
-                topic_word_distrib=lda.components_,
-                vocab=vocab_to_use,
-                dtm=sample.values
-            )
-            
-            record['mean_umass'] = np.mean(umass)
+            if COHERENCE_METRIC_AVAILABLE:
+                umass = metric_coherence_gensim(
+                    'u_mass',
+                    topic_word_distrib=lda.components_,
+                    vocab=vocab_to_use,
+                    dtm=sample.values
+                )
+                record['mean_umass'] = np.mean(umass)
+            else:
+                logger.warning(
+                    "tmtoolkit/gensim coherence metric unavailable; skipping UMass coherence during local tuning"
+                )
+                record['mean_umass'] = np.nan
             records.append(record)
         
         if save_results and output_dir:
@@ -511,6 +528,9 @@ class TopicModeler:
         """
         if self.model is None or self.feature_names is None:
             logger.error("Model not fitted or feature names not available.")
+            return None
+        if not WORDCLOUD_AVAILABLE:
+            logger.warning("wordcloud package not available; cannot render topic word cloud")
             return None
         
         # Get word weights for the topic

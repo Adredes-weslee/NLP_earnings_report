@@ -31,7 +31,13 @@ import base64
 from io import BytesIO
 from typing import Dict, List, Any, Tuple, Optional
 from datetime import datetime
-from wordcloud import WordCloud
+
+try:
+    from wordcloud import WordCloud
+    WORDCLOUD_AVAILABLE = True
+except ImportError:
+    WordCloud = None
+    WORDCLOUD_AVAILABLE = False
 
 # Import configuration values
 from ..config import (MODEL_DIR, OUTPUT_DIR, PROCESSED_DATA_DIR, 
@@ -314,6 +320,8 @@ def extract_topic_visualization(topic_model: TopicModeler) -> str:
                         topic_model.model, topic_model.dtm, vectorizer
                     )
                     return pyLDAvis.prepared_data_to_html(prepared_data)
+    except ImportError:
+        logger.info("pyLDAvis not installed; falling back to built-in topic visualization")
     except Exception as e:
         logger.warning(f"Could not create pyLDAvis visualization: {str(e)}")
     
@@ -457,6 +465,9 @@ def get_feature_importance_plot(feature_extractor: FeatureExtractor) -> Optional
 def get_wordcloud_for_topic(topic_model: TopicModeler, topic_id: int) -> Optional[str]:
     """Generate a word cloud visualization for a specific topic in the topic model."""
     if not hasattr(topic_model, 'get_topic_words'):
+        return None
+    if not WORDCLOUD_AVAILABLE:
+        logger.warning("wordcloud package not available; skipping dashboard wordcloud preview")
         return None
     
     try:

@@ -13,3 +13,6 @@ htmlcov/
 *.so
 /remove
 **/quick_test/
+dashboard.log
+data_pipeline.log
+local-run*.log

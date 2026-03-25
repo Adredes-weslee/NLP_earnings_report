@@ -24,7 +24,15 @@ import pickle
 import joblib
 
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from nltk.corpus import stopwords
+
+try:
+    from nltk.corpus import stopwords
+    NLTK_STOPWORDS_AVAILABLE = True
+except ImportError:
+    stopwords = None
+    NLTK_STOPWORDS_AVAILABLE = False
+
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
 # Import configuration values
 from ..config import (MAX_FEATURES, NGRAM_RANGE, MAX_DOC_FREQ, 
@@ -82,8 +90,21 @@ class NLPProcessor:
         self.tfidf_vectorizer = None
         self.vocab = None
         
-        # Initialize stopwords
-        self.stop_words = list(set(stopwords.words('english')))
+        # Initialize stopwords. Fall back to sklearn's built-in stopword list
+        # when NLTK or the stopwords corpus is unavailable in a local demo env.
+        if NLTK_STOPWORDS_AVAILABLE:
+            try:
+                self.stop_words = list(set(stopwords.words('english')))
+            except LookupError:
+                logger.warning(
+                    "NLTK stopwords corpus not found; falling back to sklearn ENGLISH_STOP_WORDS"
+                )
+                self.stop_words = list(ENGLISH_STOP_WORDS)
+        else:
+            logger.warning(
+                "NLTK not installed; falling back to sklearn ENGLISH_STOP_WORDS"
+            )
+            self.stop_words = list(ENGLISH_STOP_WORDS)
         # # Add financial stopwords
         # self.financial_stopwords = {'company', 'quarter', 'year', 'financial', 'reported', 'period',
         #                           'quarter', 'fiscal', 'results', 'earnings', 'reports', 'press', 

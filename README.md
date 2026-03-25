@@ -32,6 +32,16 @@ streamlit run src/dashboard/app.py
 
 See [Setup and Run](#setup-and-run) for the full environment and verification path.
 
+## Interface Preview
+
+The local dashboard entrypoint is verified from the repo root with:
+
+```bash
+streamlit run src/dashboard/app.py
+```
+
+![Dashboard overview](docs/screenshots/app-overview.png)
+
 <!-- README_SURFACE_END -->
 
 ## Why This Repository Exists

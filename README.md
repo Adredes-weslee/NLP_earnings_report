@@ -4,6 +4,22 @@ Analyze earnings-report text from data/ExpTask2Data.csv.gz and tie it to market 
 
 Provide two ways to use the system: a CLI pipeline in src/main.py and a Streamlit dashboard in.
 
+<!-- README_SURFACE_START -->
+![Python](https://img.shields.io/badge/Python-NLP_Pipeline-3776AB?style=flat-square&logo=python&logoColor=white) ![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-FF4B4B?style=flat-square&logo=streamlit&logoColor=white) ![Finance](https://img.shields.io/badge/Finance-Earnings_Reports-1F6FEB?style=flat-square)
+
+[![Portfolio Article](https://img.shields.io/badge/Portfolio%20Article-102A43?style=flat-square)](https://adredes-weslee.github.io/nlp/finance/machine-learning/data-science/2025/05/09/nlp-earnings-report-analysis.html) [![Live Demo](https://img.shields.io/badge/Live%20Demo-FF8B2B?style=flat-square)](https://adredes-weslee-nlp-earnings-report-streamlit-app-0uttcu.streamlit.app/)
+## Quickstart
+
+```bash
+pip install -r requirements.txt
+python -m src.main --action all
+streamlit run src/dashboard/app.py
+```
+
+See [Setup and Run](#setup-and-run) for the full environment and verification path.
+
+<!-- README_SURFACE_END -->
+
 ## Why This Repository Exists
 
 - Turn quarterly earnings language into features that can help explain or predict post-announcement return behavior; `DataPipeline.generate_labels` uses `BHAR0_2 > 0.05` as the binary target threshold in.

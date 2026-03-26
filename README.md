@@ -25,12 +25,13 @@ flowchart LR
 ## Quickstart
 
 ```bash
-pip install -r requirements.txt
+conda env create -f environment.yaml
+conda activate earnings-nlp
 python -m src.main --action all
 streamlit run src/dashboard/app.py
 ```
 
-See [Setup and Run](#setup-and-run) for the full environment and verification path.
+Use the Conda path above for the full local dashboard. `requirements.txt` remains the lean install used for Streamlit Cloud-style deployments, but the full Windows local stack is verified with the Python 3.11 environment in `environment.yaml`.
 
 ## Interface Preview
 
@@ -73,7 +74,7 @@ streamlit run src/dashboard/app.py
 
 ## Setup and Run
 
-1. Dependencies are pinned in environment.yaml and requirements.txt; there is no `pyproject.toml` or `setup.py`.
+1. Use `environment.yaml` for the verified local dashboard environment. It pins Python 3.11 and avoids the `gensim` build failure that can occur on Windows/Python 3.12 with the lean `requirements.txt` path.
 2. Run the dashboard with `streamlit run src/dashboard/app.py` or `streamlit run streamlit_app.py`.
 3. Run the full pipeline with `python -m src.main --action all`; use `--action data` or `--action dashboard` for narrower runs.
 4. `--action nlp` is safest after a version has been registered, because the repo does not check in `data/versions.json`; the from-scratch path is `--action all` or `python tests/test_data_pipeline.py` first.

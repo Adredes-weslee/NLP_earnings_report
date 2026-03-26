@@ -29,6 +29,7 @@ jobs:
         shell: pwsh
         run: |
           $code = @'
+          import shutil
           import subprocess
           import sys
           import time
@@ -37,10 +38,11 @@ jobs:
 
           entry = "src/dashboard/app.py"
           log_path = Path("streamlit-smoke.log")
+          streamlit_cmd = shutil.which("streamlit") or shutil.which("streamlit.exe")
+          if not streamlit_cmd:
+              raise SystemExit("Streamlit executable not found on PATH")
           cmd = [
-              sys.executable,
-              "-m",
-              "streamlit",
+              streamlit_cmd,
               "run",
               entry,
               "--server.headless=true",

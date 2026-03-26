@@ -1,0 +1,90 @@
+name: Demo Smoke Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: demo-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: earnings-nlp
+          environment-file: environment.yaml
+          auto-activate-base: false
+          channels: defaults,conda-forge,pytorch
+          channel-priority: strict
+
+      - name: Smoke test Streamlit app
+        shell: pwsh
+        run: |
+          $code = @'
+          import subprocess
+          import sys
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          entry = "src/dashboard/app.py"
+          log_path = Path("streamlit-smoke.log")
+          cmd = [
+              sys.executable,
+              "-m",
+              "streamlit.web.cli",
+              "run",
+              entry,
+              "--server.headless=true",
+              "--server.port=8501",
+              "--browser.gatherUsageStats=false",
+          ]
+
+          ok = False
+          with log_path.open("w", encoding="utf-8") as log:
+              proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, text=True)
+              try:
+                  deadline = time.time() + 240
+                  health = "http://127.0.0.1:8501/_stcore/health"
+                  while time.time() < deadline:
+                      if proc.poll() is not None:
+                          break
+                      try:
+                          with urllib.request.urlopen(health, timeout=2) as resp:
+                              if resp.status == 200:
+                                  ok = True
+                                  break
+                      except Exception:
+                          pass
+                      time.sleep(2)
+              finally:
+                  if proc.poll() is None:
+                      proc.terminate()
+                      try:
+                          proc.wait(timeout=10)
+                      except subprocess.TimeoutExpired:
+                          proc.kill()
+
+          if not ok:
+              print(log_path.read_text(encoding="utf-8", errors="replace"))
+              raise SystemExit("Streamlit smoke test failed")
+
+          print(f"Smoke test passed for {entry}")
+          '@
+          Set-Content -Path .ci-streamlit-smoke.py -Value $code
+          conda run -n earnings-nlp python .ci-streamlit-smoke.py
+
+      - name: Upload smoke log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: streamlit-smoke-log
+          path: streamlit-smoke.log
